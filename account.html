@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling Bee Account</title>
+    <link rel="stylesheet" href="styles.css?v=20260411b">
+</head>
+<body>
+    <main class="app-shell app-shell-auth">
+        <section class="hero">
+            <h1>Spelling Bee</h1>
+            <h1>Account Page</h1>
+        </section>
+
+        <section class="panel auth-page-panel">
+            <div class="leaderboard-page-header">
+                <div>
+                    <p class="status-label">Profile</p>
+                    <p class="status-value" id="profile-status">Loading account stats...</p>
+                    <p class="setup-note auth-note" id="profile-note">View your stats or open another player's profile from the leaderboard.</p>
+                </div>
+                <div class="menu-actions leaderboard-nav">
+                    <a class="ghost-button nav-button" href="/index.html">Main Menu</a>
+                    <a class="ghost-button nav-button" href="/auth.html">Log In / Sign Up</a>
+                    <a class="ghost-button nav-button" href="/leaderboard.html">Leaderboard</a>
+                </div>
+            </div>
+
+            <div class="leaderboard-highlights account-highlights" id="account-highlights"></div>
+
+            <section class="leaderboard-card leaderboard-table-card">
+                <div class="account-stat-grid" id="account-stat-grid"></div>
+            </section>
+        </section>
+    </main>
+
+    <script src="account.js?v=20260411b" defer></script>
+</body>
+</html>

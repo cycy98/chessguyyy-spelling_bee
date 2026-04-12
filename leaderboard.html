@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling Bee Leaderboard</title>
+    <link rel="stylesheet" href="styles.css?v=20260411d">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="hero">
+            <h1>Spelling Bee</h1>
+            <h1>Leaderboard</h1>
+        </section>
+
+        <section class="panel leaderboard-page-panel">
+            <div class="leaderboard-page-header">
+                <div>
+                    <p class="status-label">Ranked players</p>
+                    <p class="status-value" id="leaderboard-summary">Loading standings...</p>
+                </div>
+                <div class="menu-actions leaderboard-nav">
+                    <a class="ghost-button nav-button" href="/index.html">Main Menu</a>
+                    <a class="ghost-button nav-button" href="/account.html">Account Page</a>
+                </div>
+            </div>
+
+            <section class="leaderboard-highlights" id="leaderboard-highlights"></section>
+
+            <section class="leaderboard-card leaderboard-table-card">
+                <div class="leaderboard-table-head">
+                    <span>Rank</span>
+                    <span>Player</span>
+                    <span>ELO</span>
+                    <span>Games</span>
+                    <span>Wins</span>
+                    <span>Correct</span>
+                    <span>High WPM</span>
+                </div>
+                <div class="leaderboard-table-body" id="leaderboard-table-body"></div>
+            </section>
+        </section>
+    </main>
+
+    <script src="leaderboard.js?v=20260411d" defer></script>
+</body>
+</html>

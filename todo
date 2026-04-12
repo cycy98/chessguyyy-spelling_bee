@@ -1,0 +1,28 @@
+Ideas to implement
+
+- Add season resets with seasonal leaderboard history.
+- Show recent match history on each account page.
+- Add profile badges for milestones like 100 wins or 1000 correct words.
+- Track longest correct streak and fastest average WPM.
+- Add a "friends" or "favorite players" list.
+- Let players spectate public and private lobbies.
+- Add rematch voting for private lobbies.
+- Add lobby host controls for private rooms.
+- Add difficulty voting before a new private match starts.
+- Show a short round recap after each elimination game.
+- Add anti-spam cooldowns or mute tools for lobby chat.
+- Add an option to disable chat entirely in a lobby.
+- Add a profanity filter for usernames and chat.
+- Add sound settings like master volume and mute music/audio cues.
+- Add alternate voices or pronunciations for words.
+- Add a practice mode with no stat changes.
+- Add a daily challenge with one shared leaderboard.
+- Add custom word sets for private lobbies.
+- Add an "incorrect words review" page for each account.
+- Add account avatars or profile themes.
+- Add replay/share links for strong performances.
+- Add achievements and progression levels.
+- Add a queue or matchmaking mode instead of manual public joining.
+- Add reconnection support if someone refreshes mid-game.
+- Add admin tools to edit bad stats or remove fake accounts.
+- Add automated tests for account stats, lobby limits, and WPM tracking.

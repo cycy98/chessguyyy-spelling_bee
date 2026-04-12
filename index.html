@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling Bee Activity</title>
+    <link rel="stylesheet" href="styles.css?v=20260411c">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="hero">
+            <h1>ChessGuyyy's</h1>
+            <h1>Spelling Bee</h1>
+        </section>
+
+        <section class="panel panel-start" id="setup-panel">
+            <section class="auth-panel">
+                <div class="auth-copy">
+                    <p class="status-label">Account</p>
+                    <p class="status-value" id="auth-status">Not logged in</p>
+                    <p class="setup-note auth-note" id="auth-note">Public multiplayer needs an account.</p>
+                </div>
+                <div class="menu-actions auth-actions">
+                    <a class="secondary-button nav-button" id="auth-page-button" href="/auth.html">Log In / Sign Up</a>
+                    <a class="ghost-button nav-button" href="/leaderboard.html">Leaderboard</a>
+                    <a class="ghost-button nav-button" id="account-page-link" href="/account.html">Account Page</a>
+                    <button class="ghost-button hidden" id="logout-button" type="button">Log Out</button>
+                </div>
+            </section>
+
+            <div class="field-group" id="player-name-group">
+                <label for="player-name">Name</label>
+                <input id="player-name" type="text" maxlength="24" placeholder="Player One">
+            </div>
+
+            <div class="field-group">
+                <label>Difficulty</label>
+                <div class="difficulty-picker" id="difficulty-picker"></div>
+            </div>
+
+            <div class="field-group">
+                <label for="room-code-input">Lobby code</label>
+                <input id="room-code-input" type="text" maxlength="6" placeholder="Leave empty to create a lobby" autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="menu-actions">
+                <button class="primary-button" id="solo-button" type="button">Join Solo</button>
+                <button class="secondary-button" id="online-button" type="button">Create / Join Lobby</button>
+                <button class="secondary-button" id="public-button" type="button">Join Public Arena</button>
+                <button class="ghost-button" id="local-toggle-button" type="button">Local Multiplayer</button>
+            </div>
+
+            <section class="local-setup hidden" id="local-setup">
+                <div class="field-group">
+                    <label>Local players</label>
+                    <div class="local-player-controls">
+                        <button class="ghost-button" id="remove-local-player-button" type="button">Remove Player</button>
+                        <span class="local-player-count-display" id="local-player-count-display">2 Players</span>
+                        <button class="secondary-button" id="add-local-player-button" type="button">Add Player</button>
+                    </div>
+                </div>
+
+                <div class="local-player-grid" id="local-player-grid"></div>
+
+                <button class="primary-button" id="start-local-button" type="button">Start Local Elimination</button>
+            </section>
+
+            <p class="setup-note" id="catalog-summary">Loading word catalog...</p>
+        </section>
+
+        <section class="panel panel-game hidden" id="game-panel">
+            <div class="game-toolbar">
+                <div class="game-toolbar-copy">
+                    <p class="status-label">Current mode</p>
+                    <p class="status-value" id="mode-label">Solo</p>
+                </div>
+                <div class="toolbar-actions">
+                    <button class="ghost-button" id="exit-button" type="button">Exit Game</button>
+                    <button class="secondary-button" id="menu-button" type="button">Main Menu</button>
+                </div>
+            </div>
+
+            <div class="status-row">
+                <div>
+                    <p class="status-label">Player</p>
+                    <p class="status-value" id="player-label">-</p>
+                </div>
+                <div>
+                    <p class="status-label">Difficulty</p>
+                    <p class="status-value">
+                        <span class="difficulty-badge" id="difficulty-badge">-</span>
+                    </p>
+                </div>
+            </div>
+
+            <div class="game-layout" id="game-layout">
+                <aside class="leaderboard-card lobby-chat hidden" id="chat-panel">
+                    <div class="leaderboard-header">
+                        <div>
+                            <p class="status-label">Lobby chat</p>
+                            <p class="feedback-title" id="chat-title">Room messages</p>
+                        </div>
+                    </div>
+                    <div class="chat-list" id="chat-list"></div>
+                    <form class="chat-form" id="chat-form">
+                        <input id="chat-input" type="text" maxlength="300" placeholder="Type a message">
+                        <button class="secondary-button" id="chat-send-button" type="submit">Send</button>
+                    </form>
+                </aside>
+
+                <div class="game-main">
+                    <article class="clue-card">
+                        <div class="clue-header">
+                            <div>
+                                <p class="status-label">Part of speech</p>
+                                <p class="clue-value" id="part-of-speech">-</p>
+                            </div>
+                        </div>
+
+                        <p class="definition" id="definition-text">Start a session to get your first word.</p>
+                    </article>
+
+                    <form class="answer-form" id="answer-form">
+                        <label for="guess-input">Spell the word on the board</label>
+                        <div class="board-stage">
+                            <span class="streak-chip hidden" id="streak-badge">5 streak</span>
+                            <textarea id="guess-input" class="board-input" autocomplete="off" spellcheck="false" placeholder="SPELL IT" rows="3"></textarea>
+                            <div class="wpm-flash hidden" id="wpm-flash">0 WPM</div>
+                            <div class="timer-strip hidden" id="timer-strip" aria-live="polite">
+                                <div class="timer-strip-header">
+                                    <span class="timer-label">Time left</span>
+                                    <span class="timer-seconds" id="timer-seconds">0.0s / 0.0s</span>
+                                </div>
+                                <div class="timer-track">
+                                    <div class="timer-fill" id="timer-fill"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="answer-controls">
+                            <button class="secondary-button" id="speak-button" type="button">Play Word</button>
+                            <button class="ghost-button" id="skip-button" type="button">Skip</button>
+                            <button class="primary-button submit-button" id="submit-button" type="submit">Submit</button>
+                        </div>
+                    </form>
+
+                    <section class="feedback-card" id="feedback-card">
+                        <p class="feedback-title" id="feedback-title">Waiting for your answer</p>
+                        <p class="feedback-body" id="feedback-body">Use the audio button to hear the current word.</p>
+                    </section>
+                </div>
+
+                <section class="leaderboard-card hidden" id="leaderboard-panel">
+                    <div class="leaderboard-header">
+                        <div>
+                            <p class="status-label" id="leaderboard-kicker">Players</p>
+                            <p class="feedback-title" id="leaderboard-title">Match status</p>
+                        </div>
+                    </div>
+                    <div class="leaderboard-list" id="leaderboard-list"></div>
+                </section>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js?v=20260411c" defer></script>
+</body>
+</html>
