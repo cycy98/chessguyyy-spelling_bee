@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- MENU VIEW -->
+<div x-show="view === 'menu'" class="view menu-view"
+    @htmx:after-request.window="
+        if (event.detail.successful && event.detail.target?.id === 'auth-section') {
+            const v = document.getElementById('logged-in-username')?.value;
+            loggedInUser = v || '';
+            if (v && nameTracksLogin) playerName = v;
+        }
+    ">
+    <h1 class="title">Spelling Bee</h1>
+
+    <!-- Auth Section -->
+    {% include "fragments/menu.html" %}
+
+    <!-- Player Name -->
+    <div class="field-group">
+        <label for="player-name">Player Name</label>
+        <input type="text" id="player-name" class="input" maxlength="24" placeholder="Player One"
+            x-model="playerName"
+            @input="nameTracksLogin = false" />
+    </div>
+
+    <!-- Difficulty Picker -->
+    <div class="field-group">
+        <label>Difficulty</label>
+        <div class="difficulty-grid">
+            {% for d in difficulties %}
+            <button class="diff-card" :class="{ selected: difficulty === '{{ d }}' }"
+                @click="difficulty = '{{ d }}'">
+                <span class="diff-swatch" style="background: {{ tier_colors[d] }}"></span>
+                <span class="diff-name">{{ d | capitalize }}</span>
+                <span class="diff-count">{{ words[d] | length }} words</span>
+            </button>
+            {% endfor %}
+            <button class="diff-card" :class="{ selected: difficulty === 'randomizer' }"
+                @click="difficulty = 'randomizer'">
+                <span class="diff-swatch randomizer-swatch"></span>
+                <span class="diff-name">Randomizer</span>
+                <span class="diff-count">{{ total_words }} words</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Room Code -->
+    <div class="field-group">
+        <label for="room-code">Room Code</label>
+        <input type="text" id="room-code" class="input" maxlength="6" placeholder="Leave empty to create"
+            x-model="roomCodeInput" style="text-transform: uppercase" />
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="action-buttons">
+        <button class="btn primary"
+            hx-post="/room/create" hx-target="#game-area" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({difficulty: difficulty, player_name: playerName || 'Player', visibility: 'solo'})"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'game-area') {
+                const code = document.querySelector('[data-room-code]');
+                if(code) { roomCode = code.dataset.roomCode; mode='solo'; view='game'; }
+            }">
+            Solo
+        </button>
+
+        <button class="btn secondary"
+            x-show="!roomCodeInput"
+            hx-post="/room/create" hx-target="#game-area" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({difficulty: difficulty, player_name: playerName})"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'game-area') {
+                const code = document.querySelector('[data-room-code]');
+                if(code) { roomCode = code.dataset.roomCode; mode='lobby'; view='game'; }
+            }">
+            Create Lobby
+        </button>
+
+        <button class="btn secondary"
+            x-show="roomCodeInput.length > 0"
+            hx-post="/room/join" hx-target="#game-area" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({room_code: roomCodeInput, player_name: playerName})"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'game-area') {
+                const code = document.querySelector('[data-room-code]');
+                if(code) { roomCode = code.dataset.roomCode; mode='lobby'; view='game'; }
+            }">
+            Join Lobby
+        </button>
+
+        <button class="btn secondary"
+            :disabled="!loggedInUser"
+            hx-post="/public/join" hx-target="#game-area" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({difficulty: difficulty})"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'game-area') {
+                const code = document.querySelector('[data-room-code]');
+                if(code) { roomCode = code.dataset.roomCode; mode='public'; view='game'; }
+            }">
+            Public Arena
+        </button>
+
+        <button class="btn ghost" @click="showLocal = !showLocal">
+            Local Multiplayer
+        </button>
+    </div>
+
+    <!-- Local Multiplayer Section -->
+    <div x-show="showLocal" x-transition class="local-section">
+        <div class="local-header">
+            <button class="btn ghost small" @click="removeLocalPlayer()" :disabled="localPlayers.length <= 2">−</button>
+            <span x-text="localPlayers.length + ' players'"></span>
+            <button class="btn ghost small" @click="addLocalPlayer()" :disabled="localPlayers.length >= 12">+</button>
+        </div>
+        <div class="local-grid">
+            <template x-for="(p, i) in localPlayers" :key="i">
+                <input type="text" class="input" maxlength="24"
+                    :placeholder="'Player ' + (i + 1)"
+                    x-model="localPlayers[i]" />
+            </template>
+        </div>
+        <button class="btn primary"
+            hx-post="/room/create" hx-target="#game-area" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({difficulty: difficulty, players: JSON.stringify(localPlayers), visibility: 'local'})"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'game-area') {
+                const code = document.querySelector('[data-room-code]');
+                if(code) { roomCode = code.dataset.roomCode; mode='local'; view='game'; }
+            }">
+            Start Elimination
+        </button>
+    </div>
+
+    <!-- Nav Links -->
+    <div class="menu-nav">
+        <button class="btn ghost" hx-get="/leaderboard" hx-target="#leaderboard-area" hx-swap="innerHTML"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'leaderboard-area') view='leaderboard'">
+            Leaderboard
+        </button>
+        <button class="btn ghost" x-show="loggedInUser"
+            hx-get="/account" hx-target="#account-area" hx-swap="innerHTML"
+            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'account-area') view='account'">
+            My Profile
+        </button>
+    </div>
+
+    <p class="footer-text">{{ total_words }} words across {{ difficulties | length }} difficulties.</p>
+</div>
+
+<!-- GAME VIEW -->
+<div x-show="view === 'game'" class="view game-view">
+    <div class="toolbar">
+        <span class="mode-label" x-text="
+            mode === 'solo' ? 'Solo' :
+            mode === 'local' ? 'Local' :
+            mode === 'public' ? 'Public Arena' :
+            'Lobby ' + (roomCode || '')
+        "></span>
+        <div class="toolbar-buttons">
+            <button class="btn ghost small" @click="mainMenu()">Exit</button>
+        </div>
+    </div>
+
+    <!-- Server-rendered game area (all modes) -->
+    <div id="game-area">
+        <!-- room.html swapped here -->
+    </div>
+</div>
+
+<!-- LEADERBOARD VIEW -->
+<div x-show="view === 'leaderboard'" class="view leaderboard-view">
+    <div id="leaderboard-area">
+        <!-- leaderboard.html swapped here -->
+    </div>
+</div>
+
+<!-- ACCOUNT VIEW -->
+<div x-show="view === 'account'" class="view account-view">
+    <div id="account-area">
+        <!-- account.html swapped here -->
+    </div>
+</div>
+
+{% endblock %}

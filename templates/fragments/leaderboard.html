@@ -1,0 +1,46 @@
+{# Leaderboard fragment #}
+<div class="leaderboard">
+    <div class="lb-header">
+        <h2>{{ players | length }} tracked players.</h2>
+        <button class="btn ghost" @click="view = 'menu'">Main Menu</button>
+    </div>
+
+    {% if players | length > 0 %}
+    <div class="table-wrapper">
+        <table class="lb-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Player</th>
+                    <th>ELO</th>
+                    <th>Games</th>
+                    <th>Wins (%)</th>
+                    <th>Correct (%)</th>
+                    <th>Best WPM</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in players %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>
+                        <a href="#" class="player-link"
+                            hx-get="/account/{{ p.username }}" hx-target="#account-area" hx-swap="innerHTML"
+                            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'account-area') view = 'account'">
+                            {{ p.username }}
+                        </a>
+                    </td>
+                    <td>{{ p.elo | round(1) }}</td>
+                    <td>{{ p.games }}</td>
+                    <td>{{ ((p.wins / p.games * 100) if p.games > 0 else 0) | round(1) }}%</td>
+                    <td>{{ ((p.correct / p.words * 100) if p.words > 0 else 0) | round(1) }}%</td>
+                    <td title="{{ p.best_word }}">{{ p.best_wpm }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty-state">No players yet. Register and play to appear here!</p>
+    {% endif %}
+</div>

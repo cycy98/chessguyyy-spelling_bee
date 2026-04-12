@@ -1,0 +1,51 @@
+{# Account fragment #}
+<div class="account" data-elo="{{ player.elo | round(1) }}">
+    <div class="account-header">
+        <h2>{{ player.username }} | {{ player.elo | round(1) }} ELO</h2>
+        <div class="account-nav">
+            <button class="btn ghost" hx-get="/leaderboard" hx-target="#leaderboard-area" hx-swap="innerHTML"
+                @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'leaderboard-area') view='leaderboard'">
+                Leaderboard
+            </button>
+            <button class="btn ghost" @click="view = 'menu'">Main Menu</button>
+        </div>
+    </div>
+
+    <div class="stat-cards">
+        <div class="stat-card">
+            <div class="stat-value">{{ player.games }}</div>
+            <div class="stat-label">Games Played</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ player.words }}</div>
+            <div class="stat-label">Words Attempted</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ ((player.wins / player.games * 100) if player.games > 0 else 0) | round(1) }}%</div>
+            <div class="stat-label">Win Rate</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ ((player.correct / player.words * 100) if player.words > 0 else 0) | round(1) }}%</div>
+            <div class="stat-label">Correct Rate</div>
+        </div>
+    </div>
+
+    <div class="detail-rows">
+        <div class="detail-row">
+            <span class="detail-label">Wins</span>
+            <span class="detail-value">{{ player.wins }}</span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Correct Words</span>
+            <span class="detail-value">{{ player.correct }}</span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Highest WPM</span>
+            <span class="detail-value">{{ player.best_wpm }}</span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Best WPM Word</span>
+            <span class="detail-value">{{ player.best_word or '—' }}</span>
+        </div>
+    </div>
+</div>

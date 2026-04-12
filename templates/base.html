@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling Bee</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+</head>
+<body>
+    <div x-data="spellingBee()" class="app">
+        {% block content %}{% endblock %}
+    </div>
+    <script>
+    function spellingBee() {
+        return {
+            view: 'menu',
+            mode: null,
+            roomCode: null,
+            playerName: '',
+            difficulty: '{{ difficulties[0] }}',
+            roomCodeInput: '',
+            localPlayers: ['', ''],
+            showLocal: false,
+            audioObj: null,
+            audioUrl: '',
+            audioPlayedUrl: '',
+            inputLocked: false,
+            nameTracksLogin: true,
+            loggedInUser: '',
+
+            // Persisted across room polls (room.html polls every 500ms via HTMX,
+            // which would wipe these if they lived in room.html's local x-data)
+            guessText: '',
+            chatMsg: '',
+            sideTab: 'players',
+
+            init() {
+                const v = document.getElementById('logged-in-username')?.value;
+                this.loggedInUser = v || '';
+                if (v && this.nameTracksLogin) this.playerName = v;
+                window.addEventListener('beforeunload', () => {
+                    if (this.roomCode) navigator.sendBeacon('/forfeit');
+                });
+            },
+
+            addLocalPlayer() {
+                if (this.localPlayers.length < 12) this.localPlayers.push('');
+            },
+
+            removeLocalPlayer() {
+                if (this.localPlayers.length > 2) this.localPlayers.pop();
+            },
+
+            playAudio(url, lock) {
+                if (!url) {
+                    this.inputLocked = false;
+                    return;
+                }
+                if (this.audioObj) {
+                    this.audioObj.pause();
+                    this.audioObj = null;
+                }
+                this.audioUrl = url;
+                this.audioPlayedUrl = url;
+                this.audioObj = new Audio(url);
+                if (lock) {
+                    this.inputLocked = true;
+                    let unlocked = false;
+                    const unlock = () => {
+                        if (!unlocked) { unlocked = true; this.inputLocked = false; }
+                    };
+                    this.audioObj.addEventListener('ended', unlock);
+                    this.audioObj.addEventListener('error', unlock);
+                    setTimeout(unlock, 1000);
+                }
+                this.audioObj.play().catch(() => { this.inputLocked = false; });
+            },
+
+            replayAudio() {
+                const url = document.querySelector('[data-audio-url]');
+                if (url && url.dataset.audioUrl) {
+                    this.playAudio(url.dataset.audioUrl, false);
+                }
+            },
+
+            mainMenu() {
+                if (this.roomCode) {
+                    navigator.sendBeacon('/forfeit');
+                }
+                this.roomCode = null;
+                this.mode = null;
+                this.gameRoom = null;
+                this.gameWord = null;
+                this.gameWinner = null;
+                this.view = 'menu';
+            },
+        }
+    }
+    </script>
+</body>
+</html>
