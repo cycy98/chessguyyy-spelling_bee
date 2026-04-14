@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 
+{% if reconnect_code %}
+<input type="hidden" id="reconnect-room" value="{{ reconnect_code }}" data-mode="{{ reconnect_mode }}">
+{% endif %}
+
 <!-- MENU VIEW -->
 <div x-show="view === 'menu'" class="view menu-view"
     @htmx:after-request.window="
@@ -79,6 +83,18 @@
             Public Arena
         </button>
     </div>
+
+    {% if active_games %}
+    <p class="active-games-hint">
+        {{ total_active_players }} player{{ 's' if total_active_players != 1 else '' }} in
+        {{ active_games | length }} public game{{ 's' if active_games | length != 1 else '' }}:
+        {% for g in active_games %}
+        <span class="diff-badge" style="background:{{ tier_colors.get(g.difficulty, '#ffbf00') }}; font-size:0.75rem; padding:2px 8px">
+            {{ g.difficulty | capitalize }} ({{ g.players }})
+        </span>
+        {% endfor %}
+    </p>
+    {% endif %}
 
     <!-- Local Multiplayer Section -->
     <details>

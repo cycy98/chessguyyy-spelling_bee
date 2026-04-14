@@ -39,7 +39,6 @@ body {
 }
 
 h1, h2, h3 {
-    font-family: Georgia, 'Times New Roman', serif;
     --pico-font-weight: 700;
 }
 
@@ -387,7 +386,7 @@ h1, h2, h3 {
         &.eliminated { opacity: 0.4; }
     }
 
-    & .player-rank { width: 24px; text-align: center; font-weight: 700; color: var(--text-dim); }
+    & .player-rank { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; color: #fff; flex-shrink: 0; }
     & .player-row-name { flex: 1; font-weight: 600; }
 
     & .player-status {
@@ -502,7 +501,7 @@ h1, h2, h3 {
 
 .stat-cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 12px;
     margin-bottom: 24px;
 
@@ -524,6 +523,33 @@ h1, h2, h3 {
         letter-spacing: 0.05em;
         margin-top: 4px;
     }
+}
+
+/* ── Active Games ─────────────────────────────────────────────────────── */
+
+.active-games-hint {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+/* ── Identity ─────────────────────────────────────────────────────────── */
+
+.name-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.tier-pip {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
 }
 
 /* ── Keyframes ────────────────────────────────────────────────────────── */

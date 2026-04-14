@@ -1,6 +1,6 @@
 {# Room state fragment — rendered per-viewer, polled every 500ms #}
-<div class="room-state" data-room-code="{{ room.code }}"
-    {% if mode not in ('solo', 'local') %}hx-get="room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="innerHTML"{% endif %}
+<div class="room-state" data-room-code="{{ room.code }}" data-room-mode="{{ mode }}"
+    {% if mode not in ('solo', 'local') %}hx-get="room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="morph:innerHTML"{% endif %}
     x-init="$nextTick(() => {
         {% if audio_url and not room.winner and not waiting_for_players %}
         if (audioPlayedUrl !== '{{ audio_url }}') {
@@ -19,6 +19,13 @@
             {{ room.difficulty | capitalize }}
         </span>
         <span class="room-code-badge">{{ room.code }}</span>
+        {% if mode == 'lobby' and is_host %}
+        <button class="small outline secondary" style="margin-left:auto; padding:4px 10px; font-size:0.75rem"
+            x-data="{locked: {{ 'true' if room_locked else 'false' }}}"
+            @click="locked = !locked; fetch('room/{{ room.code }}/lock', {method: 'POST'})"
+            x-text="locked ? 'Unlock' : 'Lock'">
+        </button>
+        {% endif %}
     </div>
 
     <div class="game-layout">
@@ -73,6 +80,8 @@
                 <textarea id="guess-input" hx-preserve="true" name="draft" class="board-input"
                     x-model="guessText"
                     :disabled="inputLocked"
+                    autofocus
+                    x-effect="if (!inputLocked) $nextTick(() => $el.focus())"
                     hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"
                     @keydown.enter.prevent="submitGuess(guessText)"
                     placeholder="Type your answer..."
@@ -88,7 +97,7 @@
                         remaining: {{ time_remaining | round(1) }},
                         total: {{ time_limit | round(1) }},
                         get pct() { return Math.max(0, this.remaining / this.total * 100) }
-                    }">
+                    }" x-init="const iv = setInterval(() => { if (remaining > 0) remaining = Math.max(0, remaining - 1); else clearInterval(iv); }, 1000); $cleanup(() => clearInterval(iv))">
                     <div class="timer-info">
                         <span class="timer-label">Time left</span>
                         <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
@@ -131,8 +140,11 @@
             <div class="players-list" x-show="sideTab === 'players'">
                 {% for p in players %}
                 <div class="player-row {{ 'highlighted' if p.is_viewer else '' }} {{ 'eliminated' if p.eliminated else '' }}">
-                    <span class="player-rank">{{ 'X' if p.eliminated else loop.index }}</span>
+                    <span class="player-rank" style="background:{{ p.name | name_color }}">{{ 'X' if p.eliminated else loop.index }}</span>
                     <span class="player-row-name">{{ p.name }}</span>
+                    {% if p.highest_tier %}
+                    <span class="tier-pip" style="background:{{ tier_colors.get(p.highest_tier, '#ffbf00') }}" title="{{ p.highest_tier | capitalize }}"></span>
+                    {% endif %}
                     <span class="player-status {{ p.status | lower | replace(' ', '-') }}">{{ p.status }}</span>
                 </div>
                 {% endfor %}

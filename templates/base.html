@@ -5,14 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Spelling Bee</title>
     <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.amber.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.amber.min.css">
     <link rel="stylesheet" href="static/styles.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leo-profanity@1/lib/leo-profanity.min.js" async></script>
-    <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.8"></script>
+    <script src="https://unpkg.com/idiomorph@0.7.4/dist/idiomorph-ext.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leo-profanity@1.9.0/lib/leo-profanity.min.js" async></script>
+    <script defer src="https://unpkg.com/alpinejs@3.15.11/dist/cdn.min.js"></script>
 </head>
 <body>
-    <div x-data="spellingBee()" class="app">
+    <div x-data="spellingBee()" class="app" hx-ext="morph">
         {% block content %}{% endblock %}
     </div>
     <script>
@@ -71,6 +72,14 @@
                 const v = document.getElementById('logged-in-username')?.value;
                 this.loggedInUser = v || '';
                 if (v && this.nameTracksLogin) this.playerName = v;
+                // Reconnect to active room on page refresh
+                const rc = document.getElementById('reconnect-room');
+                if (rc) {
+                    this.roomCode = rc.value;
+                    this.mode = rc.dataset.mode;
+                    this.view = 'game';
+                    htmx.ajax('GET', `room/${rc.value}`, {target: '#game-area', swap: 'innerHTML'});
+                }
                 window.addEventListener('beforeunload', () => {
                     if (this.roomCode) navigator.sendBeacon('forfeit');
                 });
