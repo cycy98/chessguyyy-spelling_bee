@@ -1,6 +1,6 @@
-{# Room state fragment — rendered per-viewer, polled every 500ms #}
+{# Room state fragment — rendered per-viewer, pushed via SSE #}
 <div class="room-state" data-room-code="{{ room.code }}" data-room-mode="{{ mode }}"
-    {% if mode not in ('solo', 'local') %}hx-get="room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="morph:innerHTML"{% endif %}
+    {% if mode not in ('solo', 'local') %}hx-ext="sse" sse-connect="room/{{ room.code }}/stream" hx-get="room/{{ room.code }}" hx-trigger="sse:refresh" hx-target="#game-area" hx-swap="morph:innerHTML"{% endif %}
     x-init="$nextTick(() => {
         {% if audio_url and not room.winner and not waiting_for_players %}
         if (audioPlayedUrl !== '{{ audio_url }}') {

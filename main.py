@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,6 +22,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # ── Config ───
@@ -226,17 +228,15 @@ class Session:
     id: str
     player_name: str
     difficulty: str
-    word: dict[str, Any] | None = None
     room_code: str | None = None
     account_username: str | None = None
     owner_token: str | None = None
-    word_served_at: float = 0.0
-    time_limit: float = 0.0
     streak: int = 0
     words_attempted: int = 0
     words_correct: int = 0
     last_feedback: dict[str, str] = field(default_factory=dict)
-    board_glow: str | None = None  # "correct" or "incorrect", cleared after first render
+    board_glow: str | None = None  # "correct" or "incorrect"
+    board_glow_at: float = 0.0
     ip: str = ""
     last_activity: float = field(default_factory=time.time)
 
@@ -262,9 +262,345 @@ class Room:
     current_word: dict[str, Any] | None = None
     word_served_at: float = 0.0
 
+    # --- State-transition methods ---
+
+    def serve_new_word(self, streak: int = 0) -> None:
+        word_data = pick_word(self.difficulty)
+        self.current_word = word_data
+        self.word_served_at = time.time()
+        self.draft_text = ""
+        word_str = word_data["word"]
+        is_solo = self.visibility == "solo"
+        tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
+        self.turn_time_limit = tl
+        self.turn_deadline = time.time() + tl
+
+    def check_timeout(self) -> bool:
+        """Check and handle timeout. Returns True if someone was eliminated."""
+        if self.winner or self.intermission_until > time.time():
+            return False
+        if self.turn_deadline <= 0:
+            return False
+        if time.time() < self.turn_deadline:
+            return False
+        active_sid = active_session_id(self)
+        if not active_sid:
+            return False
+        sess = sessions.get(active_sid)
+        if sess:
+            sess.last_feedback = feedback("Time's up", "Counted as a skip.")
+        self.eliminated.add(active_sid)
+        self.advance_turn(eliminated=True)
+        return True
+
+    def advance_turn(self, eliminated: bool = False) -> None:
+        alive = alive_sessions(self)
+        if len(alive) <= 1:
+            self.finish_game()
+            return
+        if not eliminated:
+            self.turn_index = (self.turn_index + 1) % len(alive)
+        else:
+            self.turn_index = self.turn_index % len(alive)
+        self.draft_text = ""
+        self.serve_new_word()
+        self.last_activity = time.time()
+
+    def finish_game(self) -> None:
+        alive = alive_sessions(self)
+        winner_sid = alive[0] if alive else None
+        winner_sess = sessions.get(winner_sid) if winner_sid else None
+        self.winner = winner_sess.player_name if winner_sess else "Nobody"
+        self.turn_deadline = 0
+        self.draft_text = ""
+
+        rankings: list[dict[str, Any]] = []
+        elim_order = [s for s in self.sessions if s in self.eliminated]
+        for rank_idx, sid in enumerate(reversed(elim_order)):
+            s = sessions.get(sid)
+            if s:
+                rankings.append(
+                    {
+                        "sid": sid,
+                        "name": s.player_name,
+                        "rank": rank_idx + 2,
+                        "account": s.account_username,
+                    },
+                )
+        if winner_sid:
+            rankings.append(
+                {
+                    "sid": winner_sid,
+                    "name": winner_sess.player_name,
+                    "rank": 1,
+                    "account": winner_sess.account_username if winner_sess else None,
+                },
+            )  # type: ignore[union-attr]
+
+        tracked: list[dict[str, Any]] = []
+        if self.visibility != "local":
+            with _db_lock:
+                for r in rankings:
+                    if r["account"]:
+                        row = db.execute(
+                            "SELECT * FROM users WHERE username = ?",
+                            (r["account"],),
+                        ).fetchone()
+                        if row:
+                            tracked.append(
+                                {
+                                    **r,
+                                    "elo": float(row["elo"]),
+                                    "old_elo": float(row["elo"]),
+                                },
+                            )
+                if len(tracked) >= 2:
+                    update_elo(tracked)
+                    n_players = len(tracked)
+                    now = time.time()
+                    for t in tracked:
+                        db.execute(
+                            "UPDATE users SET elo = ? WHERE username = ?",
+                            (t["elo"], t["account"]),
+                        )
+                        db.execute(
+                            "INSERT INTO match_results(username, rank, players, ts) VALUES(?,?,?,?)",
+                            (t["account"], t["rank"], n_players, now),
+                        )
+                    db.commit()
+
+        self.last_match_results = []
+        for r in rankings:
+            entry: dict[str, Any] = {"name": r["name"], "rank": r["rank"], "sid": r["sid"]}
+            for t in tracked:
+                if t["sid"] == r["sid"]:
+                    entry["elo"] = round(t["elo"], 1)
+                    entry["elo_delta"] = round(t["elo"] - t["old_elo"], 1)
+            self.last_match_results.append(entry)
+
+        self.last_match_results.sort(key=lambda x: x["rank"])
+        if self.visibility != "local":
+            self.intermission_until = time.time() + 15
+        self.last_activity = time.time()
+
+    def start_new_game(self) -> None:
+        self.eliminated.clear()
+        self.winner = None
+        self.last_match_results = []
+        self.intermission_until = 0
+        self.game_number += 1
+        self.turn_index = 0
+        self.draft_text = ""
+        for sid in self.sessions:
+            if sid in sessions:
+                sessions[sid].last_feedback = {}
+        self.serve_new_word()
+        self.last_activity = time.time()
+        self._notify()
+
+    def _notify(self) -> None:
+        room_changed(self.code)
+
+    def tick(self) -> None:
+        """Check timeout and intermission — call before building context."""
+        changed = self.check_timeout()
+        if self.intermission_until and time.time() >= self.intermission_until and self.winner:
+            self.start_new_game()  # calls _notify
+            return
+        if changed:
+            self._notify()
+
+    def begin_game(self) -> None:
+        """Called when enough players join to start."""
+        self.serve_new_word()
+        self._notify()
+
+    def set_draft(self, text: str) -> None:
+        self.draft_text = text
+        self.last_activity = time.time()
+        self._notify()
+
+    def add_chat(self, entry: dict[str, str]) -> None:
+        self.chat.append(entry)
+        self.last_activity = time.time()
+        self._notify()
+
+    def toggle_lock(self) -> None:
+        self.locked = not self.locked
+        self._notify()
+
+    def submit_guess(self, sess: "Session", guess_text: str) -> None:
+        """Evaluate a guess and update game state. Mutates sess and self."""
+        word_data = self.current_word
+        if not word_data:
+            return
+        word_str = word_data["word"]
+        elapsed = time.time() - self.word_served_at
+        is_solo = self.visibility == "solo"
+
+        # Server-side timer enforcement
+        if self.turn_deadline > 0 and time.time() > self.turn_deadline:
+            guess_text = ""
+
+        sess.words_attempted += 1
+        wpm = round(compute_wpm(guess_text, elapsed), 1) if guess_text else 0
+
+        if is_solo:
+            if not guess_text:
+                sess.streak = 0
+                sess.last_feedback = feedback("Skipped", f"Answer: {word_str}.")
+                sess.board_glow = "incorrect"
+                sess.board_glow_at = time.time()
+                record_guess_stats(
+                    sess.account_username,
+                    0,
+                    word_str,
+                    False,
+                    tier=word_data["tier"],
+                    streak=sess.streak,
+                )
+            else:
+                correct, homophone = evaluate_guess(guess_text, word_data)
+                if correct:
+                    sess.streak += 1
+                    sess.words_correct += 1
+                    body = f"{wpm} WPM."
+                    if homophone:
+                        body = f'Accepted as "{homophone}". {wpm} WPM.'
+                    sess.last_feedback = feedback("Correct", body, "success")
+                    sess.board_glow = "correct"
+                    sess.board_glow_at = time.time()
+                    record_guess_stats(
+                        sess.account_username,
+                        wpm,
+                        word_str,
+                        True,
+                        tier=word_data["tier"],
+                        streak=sess.streak,
+                    )
+                else:
+                    sess.streak = 0
+                    sess.last_feedback = feedback("Incorrect", f"Answer: {word_str}. {wpm} WPM.")
+                    sess.board_glow = "incorrect"
+                    sess.board_glow_at = time.time()
+                    record_guess_stats(
+                        sess.account_username,
+                        wpm,
+                        word_str,
+                        False,
+                        tier=word_data["tier"],
+                        streak=sess.streak,
+                    )
+            self.serve_new_word(streak=sess.streak)
+        elif not guess_text:
+            sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {word_str}.")
+            sess.board_glow = "incorrect"
+            sess.board_glow_at = time.time()
+            record_guess_stats(
+                sess.account_username,
+                0,
+                word_str,
+                False,
+                tier=word_data["tier"],
+                streak=sess.streak,
+            )
+            self.eliminated.add(sess.id)
+            self.advance_turn(eliminated=True)
+        else:
+            correct, homophone = evaluate_guess(guess_text, word_data)
+            if correct:
+                sess.words_correct += 1
+                body = f"{wpm} WPM. You stay in."
+                if homophone:
+                    body = f'Accepted as "{homophone}". {body}'
+                sess.last_feedback = feedback("Correct", body, "success")
+                sess.board_glow = "correct"
+                sess.board_glow_at = time.time()
+                record_guess_stats(
+                    sess.account_username,
+                    wpm,
+                    word_str,
+                    True,
+                    tier=word_data["tier"],
+                    streak=sess.streak,
+                )
+                self.advance_turn(eliminated=False)
+            else:
+                sess.last_feedback = feedback("Eliminated", f"Answer: {word_str}.")
+                sess.board_glow = "incorrect"
+                sess.board_glow_at = time.time()
+                record_guess_stats(
+                    sess.account_username,
+                    wpm,
+                    word_str,
+                    False,
+                    tier=word_data["tier"],
+                    streak=sess.streak,
+                )
+                self.eliminated.add(sess.id)
+                self.advance_turn(eliminated=True)
+        self._notify()
+
+    def forfeit(self, sid: str) -> None:
+        """Remove a player who forfeits. Handles turn advancement and new word."""
+        if sid not in self.sessions:
+            return
+        prev_active = active_session_id(self)
+        was_active = prev_active == sid
+        self.eliminated.add(sid)
+        self.sessions.remove(sid)
+        alive = alive_sessions(self)
+        if len(alive) <= 1 and self.current_word and not self.winner:
+            self.finish_game()
+        elif was_active and alive:
+            # Forfeiter held the turn — wrap index and serve a fresh word
+            self.turn_index = self.turn_index % len(alive)
+            self.draft_text = ""
+            self.serve_new_word()
+        elif alive and prev_active and prev_active in alive:
+            # Forfeiter was waiting — keep the same active player
+            self.turn_index = alive.index(prev_active)
+        self.last_activity = time.time()
+        self._notify()
+
 
 sessions: dict[str, Session] = {}
 rooms: dict[str, Room] = {}
+
+# ── SSE infrastructure ───
+
+room_subscribers: dict[str, set[asyncio.Event]] = defaultdict(set)
+room_timers: dict[str, asyncio.TimerHandle] = {}
+
+
+def room_changed(code: str) -> None:
+    """Wake SSE subscribers and reschedule the timer for the next deadline."""
+    for ev in room_subscribers.get(code, set()):
+        ev.set()
+    handle = room_timers.pop(code, None)
+    if handle:
+        handle.cancel()
+    room = rooms.get(code)
+    if not room:
+        return
+    now = time.time()
+    targets = [t for t in (room.turn_deadline, room.intermission_until) if t > now]
+    if not targets:
+        return
+    delay = min(targets) - now
+    loop = asyncio.get_running_loop()
+    room_timers[code] = loop.call_later(delay, _room_timer_fire, code)
+
+
+def _room_timer_fire(code: str) -> None:
+    room_timers.pop(code, None)
+    room = rooms.get(code)
+    if room:
+        room.tick()
+
+
+def feedback(title: str, body: str, type: str = "error") -> dict[str, str]:
+    return {"title": title, "body": body, "type": type}
 
 
 def purge_stale() -> None:
@@ -273,6 +609,12 @@ def purge_stale() -> None:
     for c in stale_rooms:
         for sid in rooms[c].sessions:
             sessions.pop(sid, None)
+        # Notify subscribers before deleting so they see the room is gone
+        for ev in room_subscribers.pop(c, set()):
+            ev.set()
+        handle = room_timers.pop(c, None)
+        if handle:
+            handle.cancel()
         del rooms[c]
     stale_sessions = [
         s
@@ -441,9 +783,13 @@ def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
     if n < 2:
         return
     norm = n * (n - 1) / 2
-    denom = sum(math.exp(0.01 * p["elo"]) for p in players)
+
+    def _exp(elo: float) -> float:
+        return math.exp(0.01 * min(elo, 5000))
+
+    denom = sum(_exp(p["elo"]) for p in players)
     for p in players:
-        p["elo"] += k * ((n - p["rank"]) / norm - math.exp(0.01 * p["elo"]) / denom)
+        p["elo"] += k * ((n - p["rank"]) / norm - _exp(p["elo"]) / denom)
 
 
 # ── Rate limiter ──
@@ -456,6 +802,7 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "create_room": (5, 60),
     "chat": (10, 30),
     "guess": (60, 60),
+    "draft": (300, 60),
 }
 
 
@@ -545,154 +892,6 @@ def tpl(request: Request, name: str, ctx: dict[str, Any] | None = None) -> HTMLR
     if ctx:
         c.update(ctx)
     return templates.TemplateResponse(request, name, c)
-
-
-# ── Room helpers ──
-
-
-def serve_new_word(room: Room, streak: int = 0) -> None:
-    word_data = pick_word(room.difficulty)
-    room.current_word = word_data
-    room.word_served_at = time.time()
-    room.draft_text = ""
-    word_str = word_data["word"]
-    is_solo = room.visibility == "solo"
-    tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
-    room.turn_time_limit = tl
-    room.turn_deadline = time.time() + tl
-
-
-def check_timeout(room: Room) -> bool:
-    """Check and handle timeout. Returns True if someone was eliminated."""
-    if room.winner or room.intermission_until > time.time():
-        return False
-    if room.turn_deadline <= 0:
-        return False
-    if time.time() < room.turn_deadline:
-        return False
-    active_sid = active_session_id(room)
-    if not active_sid:
-        return False
-    sess = sessions.get(active_sid)
-    if sess:
-        sess.last_feedback = {
-            "title": "Time's up",
-            "body": "Counted as a skip.",
-            "type": "error",
-        }
-    room.eliminated.add(active_sid)
-    advance_turn(room, eliminated=True)
-    return True
-
-
-def advance_turn(room: Room, eliminated: bool = False) -> None:
-    alive = alive_sessions(room)
-    if len(alive) <= 1:
-        finish_game(room)
-        return
-    if not eliminated:
-        room.turn_index = (room.turn_index + 1) % len(alive)
-    else:
-        # After elimination, alive list shifted. Wrap index if past end.
-        room.turn_index = room.turn_index % len(alive)
-    room.draft_text = ""
-    serve_new_word(room)
-    room.last_activity = time.time()
-
-
-def finish_game(room: Room) -> None:
-    alive = alive_sessions(room)
-    winner_sid = alive[0] if alive else None
-    winner_sess = sessions.get(winner_sid) if winner_sid else None
-    room.winner = winner_sess.player_name if winner_sess else "Nobody"
-    room.turn_deadline = 0
-    room.draft_text = ""
-
-    # Build rankings
-    rankings: list[dict[str, Any]] = []
-    elim_order = [s for s in room.sessions if s in room.eliminated]
-    for rank_idx, sid in enumerate(reversed(elim_order)):
-        s = sessions.get(sid)
-        if s:
-            rankings.append(
-                {
-                    "sid": sid,
-                    "name": s.player_name,
-                    "rank": rank_idx + 2,
-                    "account": s.account_username,
-                },
-            )
-    if winner_sid:
-        rankings.append(
-            {
-                "sid": winner_sid,
-                "name": winner_sess.player_name,
-                "rank": 1,
-                "account": winner_sess.account_username if winner_sess else None,
-            },
-        )  # type: ignore[union-attr]
-
-    # ELO update (skip for local games)
-    tracked: list[dict[str, Any]] = []
-    if room.visibility != "local":
-        with _db_lock:
-            for r in rankings:
-                if r["account"]:
-                    row = db.execute(
-                        "SELECT * FROM users WHERE username = ?",
-                        (r["account"],),
-                    ).fetchone()
-                    if row:
-                        tracked.append(
-                            {
-                                **r,
-                                "elo": float(row["elo"]),
-                                "old_elo": float(row["elo"]),
-                            },
-                        )
-            if len(tracked) >= 2:
-                update_elo(tracked)
-                n_players = len(tracked)
-                now = time.time()
-                for t in tracked:
-                    db.execute(
-                        "UPDATE users SET elo = ? WHERE username = ?",
-                        (t["elo"], t["account"]),
-                    )
-                    db.execute(
-                        "INSERT INTO match_results(username, rank, players, ts) VALUES(?,?,?,?)",
-                        (t["account"], t["rank"], n_players, now),
-                    )
-                db.commit()
-
-    room.last_match_results = []
-    for r in rankings:
-        entry: dict[str, Any] = {"name": r["name"], "rank": r["rank"], "sid": r["sid"]}
-        for t in tracked:
-            if t["sid"] == r["sid"]:
-                entry["elo"] = round(t["elo"], 1)
-                entry["elo_delta"] = round(t["elo"] - t["old_elo"], 1)
-        room.last_match_results.append(entry)
-
-    room.last_match_results.sort(key=lambda x: x["rank"])
-    if room.visibility != "local":
-        room.intermission_until = time.time() + 15
-    room.last_activity = time.time()
-
-
-def start_new_game(room: Room) -> None:
-    room.eliminated.clear()
-    room.winner = None
-    room.last_match_results = []
-    room.intermission_until = 0
-    room.game_number += 1
-    room.turn_index = 0
-    room.draft_text = ""
-    for sid in room.sessions:
-        if sid in sessions:
-            sessions[sid].last_feedback = {}
-    serve_new_word(room)
-    room.last_activity = time.time()
 
 
 # ── Routes ───
@@ -847,127 +1046,7 @@ async def guess(request: Request) -> HTMLResponse:
 
     form = await request.form()
     guess_text = str(form.get("guess", "")).strip()
-    word_data = room.current_word
-    word_str = word_data["word"]
-    elapsed = time.time() - room.word_served_at
-    is_solo = room.visibility == "solo"
-
-    # Server-side timer enforcement
-    if room.turn_deadline > 0 and time.time() > room.turn_deadline:
-        guess_text = ""
-
-    sess.words_attempted += 1
-    wpm = round(compute_wpm(guess_text, elapsed), 1) if guess_text else 0
-
-    if is_solo:
-        # Solo: no elimination, track streaks
-        if not guess_text:
-            sess.streak = 0
-            sess.last_feedback = {
-                "title": "Skipped",
-                "body": f"Answer: {word_str}.",
-                "type": "error",
-            }
-            sess.board_glow = "incorrect"
-            record_guess_stats(
-                sess.account_username,
-                0,
-                word_str,
-                False,
-                tier=word_data["tier"],
-                streak=sess.streak,
-            )
-        else:
-            correct, homophone = evaluate_guess(guess_text, word_data)
-            if correct:
-                sess.streak += 1
-                sess.words_correct += 1
-                body = f"{wpm} WPM."
-                if homophone:
-                    body = f'Accepted as "{homophone}". {wpm} WPM.'
-                sess.last_feedback = {
-                    "title": "Correct",
-                    "body": body,
-                    "type": "success",
-                }
-                sess.board_glow = "correct"
-                record_guess_stats(
-                    sess.account_username,
-                    wpm,
-                    word_str,
-                    True,
-                    tier=word_data["tier"],
-                    streak=sess.streak,
-                )
-            else:
-                sess.streak = 0
-                sess.last_feedback = {
-                    "title": "Incorrect",
-                    "body": f"Answer: {word_str}. {wpm} WPM.",
-                    "type": "error",
-                }
-                sess.board_glow = "incorrect"
-                record_guess_stats(
-                    sess.account_username,
-                    wpm,
-                    word_str,
-                    False,
-                    tier=word_data["tier"],
-                    streak=sess.streak,
-                )
-        serve_new_word(room, streak=sess.streak)
-    # Elimination mode (lobby, public, local)
-    elif not guess_text:
-        sess.last_feedback = {
-            "title": "Eliminated",
-            "body": f"Skipped. Answer: {word_str}.",
-            "type": "error",
-        }
-        sess.board_glow = "incorrect"
-        record_guess_stats(
-            sess.account_username, 0, word_str, False, tier=word_data["tier"], streak=sess.streak
-        )
-        room.eliminated.add(sess.id)
-        advance_turn(room, eliminated=True)
-    else:
-        correct, homophone = evaluate_guess(guess_text, word_data)
-        if correct:
-            sess.words_correct += 1
-            body = f"{wpm} WPM. You stay in."
-            if homophone:
-                body = f'Accepted as "{homophone}". {body}'
-            sess.last_feedback = {
-                "title": "Correct",
-                "body": body,
-                "type": "success",
-            }
-            sess.board_glow = "correct"
-            record_guess_stats(
-                sess.account_username,
-                wpm,
-                word_str,
-                True,
-                tier=word_data["tier"],
-                streak=sess.streak,
-            )
-            advance_turn(room, eliminated=False)
-        else:
-            sess.last_feedback = {
-                "title": "Eliminated",
-                "body": f"Answer: {word_str}.",
-                "type": "error",
-            }
-            sess.board_glow = "incorrect"
-            record_guess_stats(
-                sess.account_username,
-                wpm,
-                word_str,
-                False,
-                tier=word_data["tier"],
-                streak=sess.streak,
-            )
-            room.eliminated.add(sess.id)
-            advance_turn(room, eliminated=True)
+    room.submit_guess(sess, guess_text)
 
     if room.visibility in ("solo", "local") and is_local:
         active_sid_val = active_session_id(room)
@@ -999,7 +1078,13 @@ async def room_create(request: Request) -> HTMLResponse:
     code = make_room_code()
 
     if visibility == "local":
-        names: list[str] = json.loads(str(form.get("players", "[]")))
+        raw = json.loads(str(form.get("players", "[]")))
+        if not isinstance(raw, list) or not raw or not all(isinstance(n, str) for n in raw):
+            return HTMLResponse(
+                "<p class='feedback error'>Invalid player list.</p>",
+                status_code=400,
+            )
+        names: list[str] = raw
         room = Room(code=code, difficulty=difficulty, visibility="local")
         all_sids: list[str] = []
         first_sess: Session | None = None
@@ -1018,8 +1103,7 @@ async def room_create(request: Request) -> HTMLResponse:
             if first_sess is None:
                 first_sess = sess
         rooms[code] = room
-        serve_new_word(room)
-        assert first_sess is not None
+        room.serve_new_word()
         active_sid = active_session_id(room)
         viewer = sessions[active_sid] if active_sid else first_sess
         resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, viewer))
@@ -1046,7 +1130,7 @@ async def room_create(request: Request) -> HTMLResponse:
         player_name=player_name,
         difficulty=difficulty,
         room_code=code,
-        account_username=user if is_solo else user,
+        account_username=user,
         ip=ip,
     )
     owner_token: str | None = None
@@ -1059,7 +1143,7 @@ async def room_create(request: Request) -> HTMLResponse:
     rooms[code] = room
 
     if is_solo:
-        serve_new_word(room)
+        room.serve_new_word()
 
     resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
     resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
@@ -1111,9 +1195,10 @@ async def room_join(request: Request) -> HTMLResponse:
 
     # If this is the second player joining a waiting room, start the game
     if len(room.sessions) == 2 and not room.current_word:
-        serve_new_word(room)
+        room.begin_game()
+    else:
+        room_changed(code)
 
-    _advance_room_state(room)
     resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
     resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
     if owner_token:
@@ -1158,7 +1243,7 @@ async def public_join(request: Request) -> HTMLResponse:
             and r.difficulty == difficulty
             and len(r.sessions) < MAX_PLAYERS
         ):
-            _advance_room_state(r)
+            r.tick()
             if not r.winner:
                 target_room = r
                 break
@@ -1182,22 +1267,17 @@ async def public_join(request: Request) -> HTMLResponse:
     target_room.last_activity = time.time()
 
     if len(target_room.sessions) == 2 and not target_room.current_word:
-        serve_new_word(target_room)
+        target_room.begin_game()
+    else:
+        room_changed(target_room.code)
 
-    _advance_room_state(target_room)
     resp = tpl(request, "fragments/room.html", build_room_ctx(request, target_room, sess))
     resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
     return resp
 
 
-def _advance_room_state(room: Room) -> None:
-    """Check timeout and intermission — call before building context."""
-    check_timeout(room)
-    if room.intermission_until and time.time() >= room.intermission_until and room.winner:
-        start_new_game(room)
-
-
 def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, Any]:
+    room.tick()
     active_sid = active_session_id(room)
     is_active = viewer.id == active_sid
     active_sess = sessions.get(active_sid) if active_sid else None
@@ -1257,11 +1337,7 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
     }
 
     if room.winner:
-        ctx["feedback"] = {
-            "title": f"{room.winner} wins",
-            "body": "",
-            "type": "success",
-        }
+        ctx["feedback"] = feedback(f"{room.winner} wins", "", "success")
         # Per-viewer intermission feedback
         for mr in room.last_match_results:
             if mr["sid"] == viewer.id:
@@ -1285,20 +1361,16 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         )
 
         if is_active:
-            ctx["feedback"] = viewer.last_feedback or {
-                "title": "Your turn",
-                "body": "",
-                "type": "info",
-            }
+            ctx["feedback"] = viewer.last_feedback or feedback("Your turn", "", "info")
         else:
             ctx["feedback"] = (
                 viewer.last_feedback
                 if viewer.id in room.eliminated
-                else {
-                    "title": f"{active_sess.player_name}'s turn" if active_sess else "Waiting",
-                    "body": "",
-                    "type": "info",
-                }
+                else feedback(
+                    f"{active_sess.player_name}'s turn" if active_sess else "Waiting",
+                    "",
+                    "info",
+                )
             )
 
         if room.turn_deadline > 0:
@@ -1306,10 +1378,8 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
             ctx["time_limit"] = room.turn_time_limit
 
         ctx["draft_text"] = room.draft_text
-        # Board glow: show once then clear
-        if viewer.board_glow:
+        if viewer.board_glow and time.time() - viewer.board_glow_at < 1.5:
             ctx["board_glow"] = viewer.board_glow
-            viewer.board_glow = None
 
     if room.visibility == "solo":
         ctx["streak"] = viewer.streak
@@ -1327,8 +1397,32 @@ async def room_poll(request: Request, code: str) -> HTMLResponse:
     if not sess or sess.room_code != code:
         return HTMLResponse("<p class='feedback error'>Not in this room.</p>", status_code=403)
 
-    _advance_room_state(room)
     return tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
+
+
+@app.get("/room/{code}/stream")
+async def room_stream(request: Request, code: str):
+    room = rooms.get(code)
+    sess = get_session(request)
+    if not room or not sess or sess.room_code != code:
+        return Response(status_code=403)
+
+    ev = asyncio.Event()
+    room_subscribers[code].add(ev)
+
+    async def gen():
+        try:
+            yield {"event": "refresh", "data": ""}
+            while code in rooms:
+                ev.clear()
+                await ev.wait()
+                yield {"event": "refresh", "data": ""}
+        finally:
+            room_subscribers[code].discard(ev)
+            if code in room_subscribers and not room_subscribers[code]:
+                del room_subscribers[code]
+
+    return EventSourceResponse(gen(), ping=15)
 
 
 @app.post("/room/{code}/draft")
@@ -1337,7 +1431,7 @@ async def room_draft(request: Request, code: str) -> Response:
     if not room:
         return Response(status_code=404)
 
-    sess, err = require_session(request, "guess")
+    sess, err = require_session(request, "draft")
     if err or not sess or sess.room_code != code:
         return Response(status_code=403)
     if active_session_id(room) != sess.id:
@@ -1345,8 +1439,7 @@ async def room_draft(request: Request, code: str) -> Response:
 
     form = await request.form()
     draft = str(form.get("draft", ""))[:MAX_DRAFT_LEN]
-    room.draft_text = draft
-    room.last_activity = time.time()
+    room.set_draft(draft)
     return Response(status_code=204)
 
 
@@ -1365,8 +1458,7 @@ async def room_chat(request: Request, code: str) -> HTMLResponse:
     form = await request.form()
     msg = str(form.get("message", "")).strip()[:MAX_CHAT_LEN]
     if msg:
-        room.chat.append({"player": sess.player_name, "message": msg, "sid": sess.id})
-        room.last_activity = time.time()
+        room.add_chat({"player": sess.player_name, "message": msg, "sid": sess.id})
 
     return HTMLResponse("")
 
@@ -1383,7 +1475,7 @@ async def room_lock_toggle(request: Request, code: str) -> Response:
         return HTMLResponse(
             "<p class='feedback error'>Only the host can lock.</p>", status_code=403
         )
-    room.locked = not room.locked
+    room.toggle_lock()
     return Response(status_code=204)
 
 
@@ -1396,15 +1488,7 @@ async def forfeit(request: Request) -> HTMLResponse:
     if sess.room_code:
         room = rooms.get(sess.room_code)
         if room and sess.id in room.sessions:
-            current_active = active_session_id(room)
-            room.eliminated.add(sess.id)
-            room.sessions.remove(sess.id)
-            alive = alive_sessions(room)
-            if len(alive) <= 1 and room.current_word and not room.winner:
-                finish_game(room)
-            elif current_active and current_active in alive:
-                room.turn_index = alive.index(current_active)
-            room.last_activity = time.time()
+            room.forfeit(sess.id)
 
     sess.room_code = None
     return HTMLResponse("")
@@ -1430,7 +1514,7 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
     for sid in room.sessions:
         if sid in sessions:
             sessions[sid].streak = 0
-    start_new_game(room)
+    room.start_new_game()
 
     active_sid = active_session_id(room)
     viewer = sessions.get(active_sid) if active_sid else sessions.get(room.sessions[0])
@@ -1439,7 +1523,10 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
 
 @app.get("/leaderboard", response_class=HTMLResponse)
 async def leaderboard(request: Request) -> HTMLResponse:
-    rows = db.execute("SELECT * FROM users ORDER BY elo DESC").fetchall()
+    rows = db.execute(
+        "SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak, tiers_cleared"
+        " FROM users ORDER BY elo DESC"
+    ).fetchall()
     return tpl(request, "fragments/leaderboard.html", {"players": rows})
 
 
@@ -1494,3 +1581,17 @@ async def own_account(request: Request) -> HTMLResponse:
     if not row:
         return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
     return tpl(request, "fragments/account.html", {"player": row, **_account_ctx(row)})
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        proxy_headers=True,  # Trust proxy headers
+        forwarded_allow_ips="127.0.0.1",  # ONLY trust headers from localhost
+        server_header=False,  # Don't broadcast "Uvicorn" version
+        limit_concurrency=100,  # Max simultaneous connections
+        timeout_keep_alive=5,  # Seconds to keep an idle connection open
+    )
