@@ -1,23 +1,13 @@
-# Todo
-
 Ideas to implement
 
-- Add profile badges for milestones like 100 wins or 1000 correct words.
 - Track longest correct streak and fastest average WPM.
 - Let players spectate public and private lobbies.
 - Add rematch voting for private lobbies.
 - Add lobby host controls for private rooms.
 - Add a profanity filter for usernames and chat.
-- Add sound settings like master volume and mute music/audio cues.
 - Add an "incorrect words review" page for each account.
 - Add account avatars or profile themes.
 - Add replay/share links for strong performances.
 - Add a queue or matchmaking mode instead of manual public joining.
 - Add reconnection support if someone refreshes mid-game.
 - Add admin tools to edit bad stats or remove fake accounts.
-
-Bugs:
-
-- Audio is only played by the speller
-- Spelling just sometimes doesn't work
-- The textbox is unfocused when a word is entered

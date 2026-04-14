@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.amber.min.css">
     <link rel="stylesheet" href="static/styles.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leo-profanity@1/lib/leo-profanity.min.js" async></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
 <body>
@@ -21,6 +22,24 @@
     });
     document.addEventListener('htmx:afterRequest', (e) => {
         if (e.detail.elt.tagName === 'BUTTON') e.detail.elt.removeAttribute('aria-busy');
+    });
+
+    /* Profanity filter — gate HTMX requests that carry user-entered names */
+    document.addEventListener('htmx:configRequest', (e) => {
+        const check = window.LeoProfanity?.check;
+        if (!check) return;
+        const params = e.detail.parameters;
+        const fields = [
+            ['username', 'username'], ['player_name', 'player name'], ['message', 'message'],
+        ];
+        for (const [key, label] of fields) {
+            if (params[key] && check.call(window.LeoProfanity, params[key])) {
+                e.preventDefault();
+                const app = Alpine.$data(document.querySelector('[x-data]'));
+                if (app) { app.profanityError = `Please choose a different ${label}.`; }
+                return;
+            }
+        }
     });
 
     function spellingBee() {
@@ -37,6 +56,10 @@
             inputLocked: false,
             nameTracksLogin: true,
             loggedInUser: '',
+
+            volume: 1,
+            muted: false,
+            profanityError: '',
 
             // Persisted across room polls (room.html polls every 500ms via HTMX,
             // which would wipe these if they lived in room.html's local x-data)
@@ -82,6 +105,7 @@
                 }
                 this.audioPlayedUrl = url;
                 this.audioObj = new Audio(url);
+                this.audioObj.volume = this.muted ? 0 : this.volume;
                 if (lock) {
                     this.inputLocked = true;
                     let unlocked = false;
@@ -114,6 +138,7 @@
 
             sendChat(roomCode) {
                 if (!this.chatMsg.trim()) return;
+                if (this.checkProfanity(this.chatMsg, 'message')) return;
                 htmx.ajax('POST', `room/${roomCode}/chat`, {
                     values: { message: this.chatMsg },
                     swap: 'none'
@@ -128,6 +153,19 @@
                 this.roomCode = null;
                 this.mode = null;
                 this.view = 'menu';
+            },
+
+            hasProfanity(text) {
+                return window.LeoProfanity?.check?.(text) ?? false;
+            },
+
+            checkProfanity(text, field) {
+                if (this.hasProfanity(text)) {
+                    this.profanityError = `Please choose a different ${field}.`;
+                    return true;
+                }
+                this.profanityError = '';
+                return false;
             },
         }
     }

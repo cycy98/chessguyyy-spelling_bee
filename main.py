@@ -1083,9 +1083,11 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         ctx["word_length"] = len(word_data["word"])
         ctx["definition"] = word_data["definition"]
         ctx["part_of_speech"] = word_data["part_of_speech"]
+
         ctx["audio_url"] = (
-            f"/audios/{word_data['word'].lower()}.mp3" if has_audio(word_data["word"]) else None
+            f"audios/{word_data['word'].lower()}.mp3" if has_audio(word_data["word"]) else None
         )
+
         if is_active:
             ctx["feedback"] = viewer.last_feedback or {
                 "title": "Your turn",

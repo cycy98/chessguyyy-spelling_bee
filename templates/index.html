@@ -19,7 +19,8 @@
     <label for="player-name">Player Name</label>
     <input type="text" id="player-name" maxlength="24" placeholder="Player One"
         x-model="playerName"
-        @input="nameTracksLogin = false" />
+        @input="nameTracksLogin = false; profanityError = ''" />
+    <p class="feedback error" x-show="profanityError" x-text="profanityError" x-cloak></p>
 
     <!-- Difficulty Picker -->
     <label>Difficulty</label>
@@ -129,7 +130,12 @@
             mode === 'public' ? 'Public Arena' :
             'Lobby ' + (roomCode || '')
         "></span>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+            <button class="outline secondary small" @click="muted = !muted"
+                x-text="muted ? 'Unmute' : 'Mute'"></button>
+            <input type="range" min="0" max="1" step="0.1"
+                x-model.number="volume" :disabled="muted"
+                style="width:80px;margin:0" />
             <button class="outline secondary small" @click="mainMenu()">Exit</button>
         </div>
     </div>

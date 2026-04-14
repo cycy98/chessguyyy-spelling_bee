@@ -2,9 +2,9 @@
 <div class="room-state" data-room-code="{{ room.code }}"
     {% if mode not in ('solo', 'local') %}hx-get="room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="innerHTML"{% endif %}
     x-init="$nextTick(() => {
-        {% if is_active and audio_url and not room.winner and not waiting_for_players %}
+        {% if audio_url and not room.winner and not waiting_for_players %}
         if (audioPlayedUrl !== '{{ audio_url }}') {
-            setTimeout(() => playAudio('{{ audio_url }}', true), 110);
+            setTimeout(() => playAudio('{{ audio_url }}', {{ 'true' if is_active else 'false' }}), 110);
         }
         {% else %}
         inputLocked = false;
@@ -70,7 +70,7 @@
                 <div class="streak-badge">{{ streak }} streak</div>
                 {% endif %}
                 {% if is_active %}
-                <textarea id="guess-input" name="draft" class="board-input"
+                <textarea id="guess-input" hx-preserve="true" name="draft" class="board-input"
                     x-model="guessText"
                     :disabled="inputLocked"
                     hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"

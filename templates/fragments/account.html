@@ -11,6 +11,20 @@
         </div>
     </div>
 
+    {% set badges = [] %}
+    {% if player.wins >= 100 %}{% set _ = badges.append(("Century Club", "🏆")) %}{% endif %}
+    {% if player.correct >= 1000 %}{% set _ = badges.append(("Word Master", "📖")) %}{% endif %}
+    {% if player.games >= 500 %}{% set _ = badges.append(("Veteran", "⭐")) %}{% endif %}
+    {% if player.words >= 50 and player.correct / player.words >= 0.9 %}{% set _ = badges.append(("Sharpshooter", "🎯")) %}{% endif %}
+    {% if player.best_wpm >= 60 %}{% set _ = badges.append(("Speed Demon", "⚡")) %}{% endif %}
+    {% if badges %}
+    <div class="badge-row">
+        {% for name, icon in badges %}
+        <span class="badge glass">{{ icon }} {{ name }}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="stat-cards">
         <div class="stat-card glass">
             <div class="stat-value">{{ player.games }}</div>
