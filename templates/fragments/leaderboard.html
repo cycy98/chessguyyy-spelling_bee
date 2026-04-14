@@ -2,12 +2,12 @@
 <div class="leaderboard">
     <div class="lb-header">
         <h2>{{ players | length }} tracked players.</h2>
-        <button class="btn ghost" @click="view = 'menu'">Main Menu</button>
+        <button class="outline secondary" @click="view = 'menu'">Main Menu</button>
     </div>
 
     {% if players | length > 0 %}
-    <div class="table-wrapper">
-        <table class="lb-table">
+    <div style="overflow-x:auto">
+        <table>
             <thead>
                 <tr>
                     <th>#</th>
@@ -24,9 +24,9 @@
                 <tr>
                     <td>{{ loop.index }}</td>
                     <td>
-                        <a href="#" class="player-link"
-                            hx-get="/account/{{ p.username }}" hx-target="#account-area" hx-swap="innerHTML"
-                            @htmx:after-request.window="if(event.detail.successful && event.detail.target?.id === 'account-area') view = 'account'">
+                        <a href="#" style="font-weight:600"
+                            hx-get="account/{{ p.username }}" hx-target="#account-area" hx-swap="innerHTML"
+                            @htmx:after-request.window="navigated('account-area','account')($event)">
                             {{ p.username }}
                         </a>
                     </td>
@@ -41,6 +41,6 @@
         </table>
     </div>
     {% else %}
-    <p class="empty-state">No players yet. Register and play to appear here!</p>
+    <p style="text-align:center;color:var(--text-dim);padding:40px">No players yet. Register and play to appear here!</p>
     {% endif %}
 </div>

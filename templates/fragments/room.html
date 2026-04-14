@@ -1,6 +1,6 @@
 {# Room state fragment — rendered per-viewer, polled every 500ms #}
 <div class="room-state" data-room-code="{{ room.code }}"
-    {% if mode not in ('solo', 'local') %}hx-get="/room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="innerHTML"{% endif %}
+    {% if mode not in ('solo', 'local') %}hx-get="room/{{ room.code }}" hx-trigger="every 500ms" hx-target="#game-area" hx-swap="innerHTML"{% endif %}
     x-init="$nextTick(() => {
         {% if is_active and audio_url and not room.winner and not waiting_for_players %}
         if (audioPlayedUrl !== '{{ audio_url }}') {
@@ -25,33 +25,33 @@
         <!-- Main Area -->
         <div class="game-main">
             {% if waiting_for_players %}
-            <div class="waiting-card">
+            <div class="waiting-card glass">
                 <h3>Waiting for players...</h3>
                 <p>Share room code: <strong>{{ room.code }}</strong></p>
             </div>
             {% elif room.winner %}
             <!-- Intermission / Game Over -->
-            <div class="clue-card">
+            <div class="clue-card glass">
                 <div class="clue-header">
                     <span class="clue-pos">Game Over</span>
                 </div>
                 <p class="clue-def">{{ room.winner }} wins!</p>
             </div>
             {% if feedback %}
-            <div class="feedback-card {{ feedback.type }}">
+            <div class="feedback-card glass {{ feedback.type }}">
                 <strong>{{ feedback.title }}</strong>
                 {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
             </div>
             {% endif %}
             {% if mode in ('solo', 'local') %}
-            <div class="controls">
-                <button class="btn primary" hx-post="/room/{{ room.code }}/restart" hx-target="#game-area" hx-swap="innerHTML">Play Again</button>
+            <div class="controls" role="group">
+                <button hx-post="room/{{ room.code }}/restart" hx-target="#game-area" hx-swap="innerHTML">Play Again</button>
             </div>
             {% endif %}
             {% else %}
             <!-- Active Game -->
             {% if definition is defined and definition %}
-            <div class="clue-card">
+            <div class="clue-card glass">
                 <div class="clue-header">
                     <span class="clue-pos">{{ part_of_speech }}</span>
                     <span class="clue-letters">{{ word_length }} letters</span>
@@ -73,17 +73,8 @@
                 <textarea id="guess-input" name="draft" class="board-input"
                     x-model="guessText"
                     :disabled="inputLocked"
-                    hx-post="/room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"
-                    @keydown.enter.prevent="
-                        if (!inputLocked) {
-                            const g = guessText; guessText = '';
-                            htmx.ajax('POST', '/guess', {
-                                target: '#game-area',
-                                swap: 'innerHTML',
-                                values: { guess: g }
-                            });
-                        }
-                    "
+                    hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"
+                    @keydown.enter.prevent="submitGuess(guessText)"
                     placeholder="Type your answer..."
                     autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
                 {% else %}
@@ -102,34 +93,24 @@
                         <span class="timer-label">Time left</span>
                         <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
                     </div>
-                    <div class="timer-bar">
-                        <div class="timer-fill" :style="'width:' + pct + '%'"
-                            :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></div>
-                    </div>
+                    <progress :value="remaining" :max="total"
+                        :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
                 </div>
                 {% endif %}
             </div>
 
             <!-- Controls (active player only) -->
             {% if is_active %}
-            <div class="controls">
-                <button class="btn secondary" @click="replayAudio()" :disabled="inputLocked">Play Word</button>
-                <button class="btn ghost"
-                    :disabled="inputLocked"
-                    @click="guessText = ''; htmx.ajax('POST', '/guess', { target: '#game-area', swap: 'innerHTML', values: { guess: '' } })">
-                    Skip
-                </button>
-                <button class="btn primary"
-                    :disabled="inputLocked"
-                    @click="const g = guessText; guessText = ''; htmx.ajax('POST', '/guess', { target: '#game-area', swap: 'innerHTML', values: { guess: g } })">
-                    Submit
-                </button>
+            <div class="controls" role="group">
+                <button class="secondary" @click="replayAudio()" :disabled="inputLocked">Play Word</button>
+                <button class="outline secondary" :disabled="inputLocked" @click="submitGuess('')">Skip</button>
+                <button :disabled="inputLocked" @click="submitGuess(guessText)">Submit</button>
             </div>
             {% endif %}
 
             <!-- Feedback -->
             {% if feedback %}
-            <div class="feedback-card {{ feedback.type }}">
+            <div class="feedback-card glass {{ feedback.type }}">
                 <strong>{{ feedback.title }}</strong>
                 {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
             </div>
@@ -138,7 +119,7 @@
         </div>
 
         <!-- Sidebar -->
-        <div class="game-sidebar"{% if mode == 'solo' %} style="display:none"{% endif %}>
+        <div class="game-sidebar glass"{% if mode == 'solo' %} style="display:none"{% endif %}>
             {% if mode not in ('local', 'solo') %}
             <div class="sidebar-tabs">
                 <button class="tab-btn" :class="{ active: sideTab === 'players' }" @click="sideTab = 'players'">Players</button>
@@ -168,27 +149,10 @@
                     {% endfor %}
                 </div>
                 <div class="chat-input-row">
-                    <input type="text" class="input chat-input" maxlength="300" placeholder="Message..."
+                    <input type="text" maxlength="300" placeholder="Message..."
                         x-model="chatMsg"
-                        @keydown.enter.prevent="
-                            if (chatMsg.trim()) {
-                                htmx.ajax('POST', '/room/{{ room.code }}/chat', {
-                                    values: { message: chatMsg },
-                                    swap: 'none'
-                                });
-                                chatMsg = '';
-                            }
-                        " />
-                    <button class="btn primary small"
-                        @click="
-                            if (chatMsg.trim()) {
-                                htmx.ajax('POST', '/room/{{ room.code }}/chat', {
-                                    values: { message: chatMsg },
-                                    swap: 'none'
-                                });
-                                chatMsg = '';
-                            }
-                        ">Send</button>
+                        @keydown.enter.prevent="sendChat('{{ room.code }}')" />
+                    <button class="small" @click="sendChat('{{ room.code }}')">Send</button>
                 </div>
             </div>
             {% endif %}

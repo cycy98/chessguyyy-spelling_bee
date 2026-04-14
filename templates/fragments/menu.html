@@ -1,21 +1,21 @@
 {# Auth + setup fragment — returned after login/logout/register #}
 {% if user %}
-<div id="auth-section" class="auth-logged-in">
+<div id="auth-section" class="auth-logged-in glass">
     <span class="auth-info">{{ user }} | {{ elo | round(1) }} ELO</span>
-    <button class="btn secondary" hx-post="/logout" hx-target="#auth-section" hx-swap="outerHTML">Logout</button>
+    <button class="secondary small" hx-post="logout" hx-target="#auth-section" hx-swap="outerHTML">Logout</button>
 </div>
 <input type="hidden" id="logged-in-username" value="{{ user }}" />
 {% else %}
-<div id="auth-section" class="auth-form">
-    <input type="text" name="username" placeholder="Username" maxlength="24" class="input" id="auth-username" />
-    <input type="password" name="password" placeholder="Password" maxlength="128" class="input" id="auth-password" />
-    <div class="auth-buttons">
-        <button class="btn primary" hx-post="/register" hx-target="#auth-section" hx-swap="outerHTML"
-            hx-include="#auth-username, #auth-password">Register</button>
-        <button class="btn secondary" hx-post="/login" hx-target="#auth-section" hx-swap="outerHTML"
-            hx-include="#auth-username, #auth-password">Login</button>
+<form id="auth-section" class="glass" style="padding:16px; margin-bottom:20px" hx-target="this" hx-swap="outerHTML" @submit.prevent>
+    <label for="auth-username">Username</label>
+    <input type="text" name="username" maxlength="24" id="auth-username" autocomplete="username" />
+    <label for="auth-password">Password</label>
+    <input type="password" name="password" maxlength="128" id="auth-password" autocomplete="current-password" />
+    <div role="group">
+        <button hx-post="register" hx-include="#auth-username, #auth-password">Register</button>
+        <button class="secondary" hx-post="login" hx-include="#auth-username, #auth-password">Login</button>
     </div>
     <div id="auth-feedback">{% if auth_error %}<p class="feedback error">{{ auth_error }}</p>{% endif %}</div>
-</div>
+</form>
 <input type="hidden" id="logged-in-username" value="" />
 {% endif %}

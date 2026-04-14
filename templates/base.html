@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Spelling Bee</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.amber.min.css">
+    <link rel="stylesheet" href="static/styles.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
@@ -13,6 +15,14 @@
         {% block content %}{% endblock %}
     </div>
     <script>
+    /* aria-busy loading indicators on HTMX buttons (Pico renders a spinner) */
+    document.addEventListener('htmx:beforeRequest', (e) => {
+        if (e.detail.elt.tagName === 'BUTTON') e.detail.elt.setAttribute('aria-busy', 'true');
+    });
+    document.addEventListener('htmx:afterRequest', (e) => {
+        if (e.detail.elt.tagName === 'BUTTON') e.detail.elt.removeAttribute('aria-busy');
+    });
+
     function spellingBee() {
         return {
             view: 'menu',
@@ -22,9 +32,7 @@
             difficulty: '{{ difficulties[0] }}',
             roomCodeInput: '',
             localPlayers: ['', ''],
-            showLocal: false,
             audioObj: null,
-            audioUrl: '',
             audioPlayedUrl: '',
             inputLocked: false,
             nameTracksLogin: true,
@@ -41,8 +49,18 @@
                 this.loggedInUser = v || '';
                 if (v && this.nameTracksLogin) this.playerName = v;
                 window.addEventListener('beforeunload', () => {
-                    if (this.roomCode) navigator.sendBeacon('/forfeit');
+                    if (this.roomCode) navigator.sendBeacon('forfeit');
                 });
+            },
+
+            navigated(targetId, newView, newMode) {
+                return (event) => {
+                    if (!event.detail.successful || event.detail.target?.id !== targetId) return;
+                    const el = document.querySelector('[data-room-code]');
+                    if (el) this.roomCode = el.dataset.roomCode;
+                    if (newMode) this.mode = newMode;
+                    this.view = newView;
+                };
             },
 
             addLocalPlayer() {
@@ -62,7 +80,6 @@
                     this.audioObj.pause();
                     this.audioObj = null;
                 }
-                this.audioUrl = url;
                 this.audioPlayedUrl = url;
                 this.audioObj = new Audio(url);
                 if (lock) {
@@ -85,15 +102,31 @@
                 }
             },
 
+            submitGuess(text) {
+                if (this.inputLocked) return;
+                this.guessText = '';
+                htmx.ajax('POST', 'guess', {
+                    target: '#game-area',
+                    swap: 'innerHTML',
+                    values: { guess: text || '' }
+                });
+            },
+
+            sendChat(roomCode) {
+                if (!this.chatMsg.trim()) return;
+                htmx.ajax('POST', `room/${roomCode}/chat`, {
+                    values: { message: this.chatMsg },
+                    swap: 'none'
+                });
+                this.chatMsg = '';
+            },
+
             mainMenu() {
                 if (this.roomCode) {
-                    navigator.sendBeacon('/forfeit');
+                    navigator.sendBeacon('forfeit');
                 }
                 this.roomCode = null;
                 this.mode = null;
-                this.gameRoom = null;
-                this.gameWord = null;
-                this.gameWinner = null;
                 this.view = 'menu';
             },
         }

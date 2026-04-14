@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ───
 
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "spellingbee.db"
@@ -38,7 +38,7 @@ MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
 
-# ── Word catalog ─────────────────────────────────────────────────────────────
+# ── Word catalog ──
 
 with Path(ROOT / "wordlist.json").open() as f:
     _raw_catalog: dict[str, Any] = json.load(f)
@@ -70,7 +70,7 @@ def has_audio(word: str) -> bool:
     return (ROOT / "audios" / f"{word.lower()}.mp3").exists()
 
 
-# ── Database ─────────────────────────────────────────────────────────────────
+# ── Database ─
 
 db = sqlite3.connect(str(DB_PATH), check_same_thread=False)
 db.row_factory = sqlite3.Row
@@ -90,7 +90,7 @@ db.commit()
 _db_lock = threading.Lock()
 
 
-# ── Password hashing ────────────────────────────────────────────────────────
+# ── Password hashing ─
 
 
 def hash_password(pw: str) -> str:
@@ -106,7 +106,7 @@ def verify_password(pw: str, stored: str) -> bool:
     return hmac.compare_digest(h.hex(), hash_hex)
 
 
-# ── Auth tokens ──────────────────────────────────────────────────────────────
+# ── Auth tokens ───
 
 
 def make_token(username: str) -> str:
@@ -150,7 +150,7 @@ def set_auth_cookie(response: Response, username: str) -> None:
     )
 
 
-# ── In-memory state ─────────────────────────────────────────────────────────
+# ── In-memory state ──
 
 
 @dataclass
@@ -252,7 +252,8 @@ def verify_session_owner(request: Request, sess: Session) -> bool:
 
 
 def require_session(
-    request: Request, rate_key: str | None = None,
+    request: Request,
+    rate_key: str | None = None,
 ) -> tuple[Session | None, HTMLResponse | None]:
     """Rate-check + session + ownership in one call. Returns (session, error_response)."""
     if rate_key:
@@ -279,7 +280,8 @@ def check_creation_limits(request: Request) -> HTMLResponse | None:
     purge_stale()
     if count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
         return HTMLResponse(
-            "<p class='feedback error'>Too many active sessions.</p>", status_code=429,
+            "<p class='feedback error'>Too many active sessions.</p>",
+            status_code=429,
         )
     return None
 
@@ -298,7 +300,7 @@ def active_session_id(room: Room) -> str | None:
 
 def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) -> float:
     chars = max(len(word) / 5, 0.2)
-    wpm_required = 10.0 if multiplayer else 5 * streak ** 0.8 + 10
+    wpm_required = 10.0 if multiplayer else 5 * streak**0.8 + 10
     return max(3.0, (chars / wpm_required) * 60)
 
 
@@ -346,7 +348,7 @@ def record_guess_stats(username: str | None, wpm: float, word_str: str, correct:
         db.commit()
 
 
-# ── ELO ──────────────────────────────────────────────────────────────────────
+# ── ELO ─
 
 
 def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
@@ -359,7 +361,7 @@ def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
         p["elo"] += k * ((n - p["rank"]) / norm - math.exp(0.01 * p["elo"]) / denom)
 
 
-# ── Rate limiter ─────────────────────────────────────────────────────────────
+# ── Rate limiter ──
 
 rate_buckets: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
 
@@ -367,8 +369,8 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "login": (5, 60),
     "register": (3, 60),
     "create_room": (5, 60),
-    "chat": (10, 60),
-    "guess": (20, 60),
+    "chat": (10, 30),
+    "guess": (60, 60),
 }
 
 
@@ -383,7 +385,7 @@ def check_rate(ip: str, action: str) -> bool:
     return True
 
 
-# ── Middleware ────────────────────────────────────────────────────────────────
+# ── Middleware
 
 
 class BodyLimitMiddleware(BaseHTTPMiddleware):
@@ -394,14 +396,15 @@ class BodyLimitMiddleware(BaseHTTPMiddleware):
                 try:
                     if int(cl) > MAX_BODY:
                         return HTMLResponse(
-                            "<p class='error'>Request too large.</p>", status_code=413,
+                            "<p class='error'>Request too large.</p>",
+                            status_code=413,
                         )
                 except ValueError:
                     return HTMLResponse("<p class='error'>Invalid request.</p>", status_code=400)
         return await call_next(request)
 
 
-# ── App ──────────────────────────────────────────────────────────────────────
+# ── App ─
 
 app = FastAPI()
 app.add_middleware(BodyLimitMiddleware)
@@ -437,7 +440,7 @@ def tpl(request: Request, name: str, ctx: dict[str, Any] | None = None) -> HTMLR
     return templates.TemplateResponse(request, name, c)
 
 
-# ── Room helpers ─────────────────────────────────────────────────────────────
+# ── Room helpers ──
 
 
 def serve_new_word(room: Room, streak: int = 0) -> None:
@@ -529,7 +532,8 @@ def finish_game(room: Room) -> None:
             for r in rankings:
                 if r["account"]:
                     row = db.execute(
-                        "SELECT * FROM users WHERE username = ?", (r["account"],),
+                        "SELECT * FROM users WHERE username = ?",
+                        (r["account"],),
                     ).fetchone()
                     if row:
                         tracked.append(
@@ -579,7 +583,7 @@ def start_new_game(room: Room) -> None:
     room.last_activity = time.time()
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes ───
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -792,7 +796,7 @@ async def guess(request: Request) -> HTMLResponse:
     return tpl(request, "fragments/room.html", build_room_ctx(request, room, viewer))
 
 
-# ── Room creation / joining ──────────────────────────────────────────────────
+# ── Room creation / joining
 
 
 @app.post("/room/create", response_class=HTMLResponse)
@@ -952,7 +956,8 @@ async def public_join(request: Request) -> HTMLResponse:
 
     if count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
         return HTMLResponse(
-            "<p class='feedback error'>Too many active sessions.</p>", status_code=429,
+            "<p class='feedback error'>Too many active sessions.</p>",
+            status_code=429,
         )
 
     form = await request.form()
