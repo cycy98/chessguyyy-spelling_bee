@@ -104,7 +104,7 @@
                     :disabled="inputLocked"
                     autofocus
                     x-effect="if (!inputLocked) $nextTick(() => $el.focus())"
-                    hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"
+                    {% if mode not in ("solo", "local") %}hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"{% endif %}
                     @keydown.enter.prevent="submitGuess(guessText)"
                     @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-z]/g, '')"
                     placeholder="Type your answer..."
@@ -126,10 +126,11 @@
                 <div class="timer"
                      data-deadline="{{ turn_deadline }}"
                      data-total="{{ time_limit | round(1) }}"
-                     x-data="{ remaining: 0, total: 0, get pct() { return this.total > 0 ? Math.max(0, this.remaining / this.total * 100) : 0 } }"
+                     x-data="{ remaining: 0, total: 0, initialRemaining: 0, get pct() { return this.initialRemaining > 0 ? Math.max(0, this.remaining / this.initialRemaining * 100) : 0 } }"
                      x-init="
                          total = +$el.dataset.total;
                          remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                         initialRemaining = remaining;
                          const iv = setInterval(() => {
                              remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
                              if (remaining === 0) clearInterval(iv);
@@ -140,7 +141,7 @@
                         <span class="timer-label">Time left</span>
                         <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
                     </div>
-                    <progress :value="remaining" :max="total"
+                    <progress :value="remaining" :max="initialRemaining"
                         :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
                 </div>
                 {% endif %}

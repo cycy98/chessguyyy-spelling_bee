@@ -1,718 +1,226 @@
-"""Spelling Bee — single-file FastAPI backend."""
+"""Spelling Bee — FastAPI HTTP shell."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import math
 import re
-import secrets
-import string
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from backend import db
-from backend.auth import hash_password, verify_password, get_current_user, set_auth_cookie
+from backend.auth import get_current_user
+from backend.errors import HtmxError
+from backend.game import (
+    DIFFICULTIES,
+    MAX_CHAT_LEN,
+    MAX_LOCAL_PLAYERS,
+    MAX_PLAYERS,
+    MAX_SESSIONS_PER_IP,
+    MAX_WORD_LEN,
+    ROOT,
+    Visibility,
+    GameState,
+    Room,
+    Session,
+    active_session_id,
+    alive_sessions,
+    clean_name,
+    display_mode,
+    feedback,
+    has_audio,
+    room_host_sid,
+    validate_difficulty,
+)
+from persistence import (
+    _load_highest_tier,
+    is_name_reserved,
+    persist_match_elo,
+    record_guess_stats,
+)
+from routes.account import router as account_router
+from routes.auth import router as auth_router
+from templating import _catalog_ctx, client_ip, tpl
 
-# ── Config ───
 
-ROOT = Path(__file__).parent
+
+class ImmutableStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Any) -> StarletteResponse:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+# ── Config (HTTP-only) ──
+
 DB_PATH = ROOT / "spellingbee.db"
 MAX_BODY = 8 * 1024
-MAX_CHAT = 80
-MAX_CHAT_LEN = 150
-MAX_WORD_LEN = 50
-STALE_MINUTES = 30
 DISCONNECT_GRACE = 12  # seconds before a disconnected player is auto-forfeited
-MAX_SESSIONS_PER_IP = 20
-MAX_PLAYERS = 15
-MAX_LOCAL_PLAYERS = 12
 
-# ── Word catalog ──
-
-with Path(ROOT / "wordlist.json").open() as f:
-    _raw_catalog: dict[str, Any] = json.load(f)
-
-TIER_COLORS: dict[str, str] = _raw_catalog["info"]["color"]
-DIFFICULTIES: list[str] = [k for k in _raw_catalog if k != "info"]
-WORDS: dict[str, dict[str, dict[str, Any]]] = {d: _raw_catalog[d] for d in DIFFICULTIES}
-TOTAL_WORDS = sum(len(v) for v in WORDS.values())
-
-ALL_WORDS: dict[str, dict[str, Any]] = {
-    w: {**wdata, "tier": tier} for tier, wdict in WORDS.items() for w, wdata in wdict.items()
-}
-
-_WORD_KEYS: dict[str, list[str]] = {d: list(ws) for d, ws in WORDS.items()}
-_ALL_WORD_KEYS: list[str] = list(ALL_WORDS)
-
-
-def pick_word(difficulty: str) -> dict[str, Any]:
-    if difficulty == "randomizer":
-        word_str = secrets.choice(_ALL_WORD_KEYS)
-        return {"word": word_str, **ALL_WORDS[word_str]}
-    keys = _WORD_KEYS.get(difficulty, _WORD_KEYS[DIFFICULTIES[0]])
-    pool = WORDS.get(difficulty, WORDS[DIFFICULTIES[0]])
-    word_str = secrets.choice(keys)
-    return {"word": word_str, **pool[word_str], "tier": difficulty}
-
-
-def has_audio(word: str) -> bool:
-    return (ROOT / "audios" / f"{word.lower()}.mp3").exists()
-
-
-# ── In-memory state ──
-@dataclass
-class Session:
-    id: str
-    player_name: str
-    difficulty: str
-    room_code: str | None = None
-    account_username: str | None = None
-    highest_tier: str = ""
-    streak: int = 0
-    words_attempted: int = 0
-    words_correct: int = 0
-    last_feedback: dict[str, str] = field(default_factory=dict)
-    ip: str = ""
-    last_activity: float = field(default_factory=time.time)
+# ── Server state (wraps GameState, adds asyncio timers + SSE) ──
 
 
 @dataclass
-class Room:
-    code: str
-    difficulty: str
-    visibility: str  # "private" | "public"
-    sessions: list[str] = field(default_factory=list)  # session IDs, ordered
-    turn_index: int = 0
-    eliminated: set[str] = field(default_factory=set)
-    winner: str | None = None
-    draft_text: str = ""
-    chat: deque[dict[str, str]] = field(default_factory=lambda: deque(maxlen=MAX_CHAT))
-    intermission_until: float = 0.0
-    turn_deadline: float = 0.0
-    turn_time_limit: float = 0.0
-    game_number: int = 1
-    last_match_results: list[dict[str, Any]] = field(default_factory=list)
-    locked: bool = False
-    last_activity: float = field(default_factory=time.time)
-    current_word: dict[str, Any] | None = None
-    word_served_at: float = 0.0
+class ServerState:
+    game: GameState = field(default_factory=GameState)
+    subscribers: dict[str, set[asyncio.Event]] = field(default_factory=lambda: defaultdict(set))
+    room_timers: dict[str, asyncio.TimerHandle] = field(default_factory=dict)
+    disconnect_timers: dict[str, asyncio.TimerHandle] = field(default_factory=dict)
 
-    # --- State-transition methods ---
+    def make_room(self, code: str, difficulty: str, visibility: Visibility) -> Room:
+        return Room(
+            code=code,
+            difficulty=difficulty,
+            visibility=visibility,
+            on_change=self.room_changed,
+            resolve_session=self.game.sessions.get,
+        )
 
-    def serve_new_word(self, streak: int = 0) -> None:
-        word_data = pick_word(self.difficulty)
-        self.current_word = word_data
-        self.word_served_at = time.time()
-        self.draft_text = ""
-        word_str = word_data["word"]
-        is_solo = self.visibility == "solo"
-        tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
-        self.turn_time_limit = tl
-        self.turn_deadline = time.time() + tl
-        _arm_room_timer(self.code)
-
-    async def check_timeout(self) -> bool:
-        """Check and handle timeout. Returns True if someone was eliminated."""
-        if self.winner or self.intermission_until > time.time():
-            return False
-        if self.turn_deadline <= 0:
-            return False
-        if time.time() < self.turn_deadline:
-            return False
-        active_sid = active_session_id(self)
-        if not active_sid:
-            return False
-        sess = sessions.get(active_sid)
-        if sess:
-            sess.last_feedback = feedback("Time's up", "Counted as a skip.")
-        self.eliminated.add(active_sid)
-        await self.advance_turn(eliminated=True)
-        return True
-
-    async def advance_turn(self, eliminated: bool = False) -> None:
-        alive = alive_sessions(self)
-        if len(alive) <= 1:
-            await self.finish_game()
-            return
-        if not eliminated:
-            self.turn_index = (self.turn_index + 1) % len(alive)
-        else:
-            self.turn_index = self.turn_index % len(alive)
-        self.draft_text = ""
-        self.serve_new_word()
-        self.last_activity = time.time()
-
-    async def finish_game(self) -> None:
-        alive = alive_sessions(self)
-        winner_sid = alive[0] if alive else None
-        winner_sess = sessions.get(winner_sid) if winner_sid else None
-        self.winner = winner_sess.player_name if winner_sess else "Nobody"
-        self.turn_deadline = 0
-        self.draft_text = ""
-
-        rankings: list[dict[str, Any]] = []
-        elim_order = [s for s in self.sessions if s in self.eliminated]
-        for rank_idx, sid in enumerate(reversed(elim_order)):
-            s = sessions.get(sid)
-            if s:
-                rankings.append(
-                    {
-                        "sid": sid,
-                        "name": s.player_name,
-                        "rank": rank_idx + 2,
-                        "account": s.account_username,
-                    },
-                )
-        if winner_sid:
-            rankings.append(
-                {
-                    "sid": winner_sid,
-                    "name": winner_sess.player_name,
-                    "rank": 1,
-                    "account": winner_sess.account_username if winner_sess else None,
-                },
-            )  # type: ignore[union-attr]
-
-        tracked: list[dict[str, Any]] = []
-        if self.visibility != "local":
-            async with db.transaction() as conn:
-                for r in rankings:
-                    if r["account"]:
-                        cursor = await conn.execute(
-                            "SELECT * FROM users WHERE username = ?",
-                            (r["account"],),
-                        )
-                        row = await cursor.fetchone()
-                        if row:
-                            tracked.append(
-                                {
-                                    **r,
-                                    "elo": float(row["elo"]),
-                                    "old_elo": float(row["elo"]),
-                                },
-                            )
-                if len(tracked) >= 2:
-                    update_elo(tracked)
-                    n_players = len(tracked)
-                    now = time.time()
-                    for t in tracked:
-                        await conn.execute(
-                            "UPDATE users SET elo = ? WHERE username = ?",
-                            (t["elo"], t["account"]),
-                        )
-                        await conn.execute(
-                            "INSERT INTO match_results(username, rank, players, ts) VALUES(?,?,?,?)",
-                            (t["account"], t["rank"], n_players, now),
-                        )
-
-        self.last_match_results = []
-        for r in rankings:
-            entry: dict[str, Any] = {"name": r["name"], "rank": r["rank"], "sid": r["sid"]}
-            for t in tracked:
-                if t["sid"] == r["sid"]:
-                    entry["elo"] = round(t["elo"], 1)
-                    entry["elo_delta"] = round(t["elo"] - t["old_elo"], 1)
-            self.last_match_results.append(entry)
-
-        self.last_match_results.sort(key=lambda x: x["rank"])
-        if self.visibility != "local":
-            self.intermission_until = time.time() + 15
-        self.last_activity = time.time()
-
-    def start_new_game(self) -> None:
-        self.eliminated.clear()
-        self.winner = None
-        self.last_match_results = []
-        self.intermission_until = 0
-        self.game_number += 1
-        self.turn_index = 0
-        self.draft_text = ""
-        for sid in self.sessions:
-            if sid in sessions:
-                sessions[sid].last_feedback = {}
-        self.serve_new_word()
-        self.last_activity = time.time()
-        self._notify()
-
-    def _notify(self) -> None:
-        room_changed(self.code)
-
-    async def tick(self) -> None:
-        """Check timeout and intermission — call before building context."""
-        changed = await self.check_timeout()
-        if self.intermission_until and time.time() >= self.intermission_until and self.winner:
-            self.start_new_game()  # calls _notify
-            return
-        if changed:
-            self._notify()
-
-    def begin_game(self) -> None:
-        """Called when enough players join to start."""
-        self.serve_new_word()
-        self._notify()
-
-    def set_draft(self, text: str) -> None:
-        self.draft_text = text
-        self.last_activity = time.time()
-
-    def add_chat(self, entry: dict[str, str]) -> None:
-        self.chat.append(entry)
-        self.last_activity = time.time()
-        self._notify()
-
-    def toggle_lock(self) -> None:
-        self.locked = not self.locked
-        self._notify()
-
-    async def submit_guess(self, sess: Session, guess_text: str) -> None:
-        """Evaluate a guess and update game state. Mutates sess and self."""
-        word_data = self.current_word
-        if not word_data:
-            return
-        word_str = word_data["word"]
-        elapsed = time.time() - self.word_served_at
-        is_solo = self.visibility == "solo"
-
-        # Server-side timer enforcement
-        if self.turn_deadline > 0 and time.time() > self.turn_deadline:
-            guess_text = ""
-
-        sess.words_attempted += 1
-        wpm = round(compute_wpm(guess_text, elapsed), 1) if guess_text else 0
-
-        if is_solo:
-            if not guess_text:
-                sess.streak = 0
-                sess.last_feedback = feedback("Skipped", f"Answer: {word_str}.")
-                await record_guess_stats(
-                    sess.account_username,
-                    0,
-                    word_str,
-                    False,
-                    tier=word_data["tier"],
-                    streak=sess.streak,
-                )
-            else:
-                correct, homophone = evaluate_guess(guess_text, word_data)
-                if correct:
-                    sess.streak += 1
-                    sess.words_correct += 1
-                    body = f"{wpm} WPM."
-                    if homophone:
-                        body = f'Accepted as "{homophone}". {wpm} WPM.'
-                    sess.last_feedback = feedback("Correct", body, "success")
-                    await record_guess_stats(
-                        sess.account_username,
-                        wpm,
-                        word_str,
-                        True,
-                        tier=word_data["tier"],
-                        streak=sess.streak,
-                    )
-                    if sess.account_username:
-                        t = word_data["tier"]
-                        if t in DIFFICULTIES and (
-                            not sess.highest_tier
-                            or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
-                        ):
-                            sess.highest_tier = t
-                else:
-                    sess.streak = 0
-                    sess.last_feedback = feedback("Incorrect", f"Answer: {word_str}. {wpm} WPM.")
-                    await record_guess_stats(
-                        sess.account_username,
-                        wpm,
-                        word_str,
-                        False,
-                        tier=word_data["tier"],
-                        streak=sess.streak,
-                    )
-            self.serve_new_word(streak=sess.streak)
-        elif not guess_text:
-            sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {word_str}.")
-            await record_guess_stats(
-                sess.account_username,
-                0,
-                word_str,
-                False,
-                tier=word_data["tier"],
-                streak=sess.streak,
-            )
-            self.eliminated.add(sess.id)
-            await self.advance_turn(eliminated=True)
-        else:
-            correct, homophone = evaluate_guess(guess_text, word_data)
-            if correct:
-                sess.words_correct += 1
-                body = f"{wpm} WPM. You stay in."
-                if homophone:
-                    body = f'Accepted as "{homophone}". {body}'
-                sess.last_feedback = feedback("Correct", body, "success")
-                await record_guess_stats(
-                    sess.account_username,
-                    wpm,
-                    word_str,
-                    True,
-                    tier=word_data["tier"],
-                    streak=sess.streak,
-                )
-                if sess.account_username:
-                    t = word_data["tier"]
-                    if t in DIFFICULTIES and (
-                        not sess.highest_tier
-                        or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
-                    ):
-                        sess.highest_tier = t
-                await self.advance_turn(eliminated=False)
-            else:
-                sess.last_feedback = feedback("Eliminated", f"Answer: {word_str}.")
-                await record_guess_stats(
-                    sess.account_username,
-                    wpm,
-                    word_str,
-                    False,
-                    tier=word_data["tier"],
-                    streak=sess.streak,
-                )
-                self.eliminated.add(sess.id)
-                await self.advance_turn(eliminated=True)
-        self._notify()
-
-    async def forfeit(self, sid: str) -> None:
-        """Remove a player who forfeits. Handles turn advancement and new word."""
-        if sid not in self.sessions:
-            return
-        prev_active = active_session_id(self)
-        was_active = prev_active == sid
-        self.eliminated.add(sid)
-        self.sessions.remove(sid)
-        alive = alive_sessions(self)
-        if len(alive) <= 1 and self.current_word and not self.winner:
-            await self.finish_game()
-        elif was_active and alive:
-            # Forfeiter held the turn — wrap index and serve a fresh word
-            self.turn_index = self.turn_index % len(alive)
-            self.draft_text = ""
-            self.serve_new_word()
-        elif alive and prev_active and prev_active in alive:
-            # Forfeiter was waiting — keep the same active player
-            self.turn_index = alive.index(prev_active)
-        self.last_activity = time.time()
-        self._notify()
-
-
-sessions: dict[str, Session] = {}
-rooms: dict[str, Room] = {}
-
-# ── SSE infrastructure ───
-
-room_subscribers: dict[str, set[asyncio.Event]] = defaultdict(set)
-room_timers: dict[str, asyncio.TimerHandle] = {}
-disconnect_timers: dict[str, asyncio.TimerHandle] = {}
-
-
-def _arm_room_timer(code: str) -> None:
-    """Cancel any pending timer and schedule the next deadline for this room."""
-    handle = room_timers.pop(code, None)
-    if handle:
-        handle.cancel()
-    room = rooms.get(code)
-    if not room:
-        return
-    now = time.time()
-    targets = [t for t in (room.turn_deadline, room.intermission_until) if t > now]
-    if not targets:
-        return
-    delay = min(targets) - now
-    loop = asyncio.get_running_loop()
-    room_timers[code] = loop.call_later(delay, _room_timer_fire, code)
-
-
-def room_changed(code: str) -> None:
-    """Wake SSE subscribers and reschedule the timer for the next deadline."""
-    for ev in room_subscribers.get(code, set()):
-        ev.set()
-    _arm_room_timer(code)
-
-
-def _room_timer_fire(code: str) -> None:
-    room_timers.pop(code, None)
-    room = rooms.get(code)
-    if room:
-        asyncio.create_task(room.tick(), name=f"tick-{code}")
-
-
-def _schedule_disconnect_forfeit(code: str, sid: str) -> None:
-    room = rooms.get(code)
-    if not room or room.visibility in ("solo", "local"):
-        return
-    if sid not in room.sessions:
-        return  # already forfeited (e.g. sendBeacon beat the SSE drop)
-    loop = asyncio.get_running_loop()
-    handle = loop.call_later(DISCONNECT_GRACE, _disconnect_forfeit, code, sid)
-    disconnect_timers[sid] = handle
-
-
-def _disconnect_forfeit(code: str, sid: str) -> None:
-    disconnect_timers.pop(sid, None)
-    room = rooms.get(code)
-    if room:
-        asyncio.create_task(room.forfeit(sid), name=f"forfeit-{sid}")
-
-
-def feedback(title: str, body: str, type: str = "error") -> dict[str, str]:
-    return {"title": title, "body": body, "type": type}
-
-
-def purge_stale() -> None:
-    cutoff = time.time() - STALE_MINUTES * 60
-    stale_rooms = [c for c, r in rooms.items() if r.last_activity < cutoff]
-    for c in stale_rooms:
-        for sid in rooms[c].sessions:
-            sessions.pop(sid, None)
-            handle = disconnect_timers.pop(sid, None)
-            if handle:
-                handle.cancel()
-        # Notify subscribers before deleting so they see the room is gone
-        for ev in room_subscribers.pop(c, set()):
+    def room_changed(self, code: str) -> None:
+        """Wake SSE subscribers and reschedule the timer for the next deadline."""
+        for ev in self.subscribers.get(code, set()):
             ev.set()
-        handle = room_timers.pop(c, None)
+        self._arm_room_timer(code)
+
+    def _arm_room_timer(self, code: str) -> None:
+        """Cancel any pending timer and schedule the next deadline for this room."""
+        handle = self.room_timers.pop(code, None)
         if handle:
             handle.cancel()
-        del rooms[c]
-    stale_sessions = [
-        s
-        for s, sess in sessions.items()
-        if (sess.room_code and sess.room_code not in rooms) or sess.last_activity < cutoff
-    ]
-    for s in stale_sessions:
-        sessions.pop(s, None)
-    # Evict empty rate-limit buckets
-    stale_ips = [
-        ip for ip, actions in rate_buckets.items() if all(not ts for ts in actions.values())
-    ]
-    for ip in stale_ips:
-        del rate_buckets[ip]
+        room = self.game.rooms.get(code)
+        if not room:
+            return
+        now = time.time()
+        targets = [t for t in (room.turn_deadline, room.intermission_until) if t > now]
+        if not targets:
+            return
+        delay = min(targets) - now
+        loop = asyncio.get_running_loop()
+        self.room_timers[code] = loop.call_later(delay, self._room_timer_fire, code)
+
+    def _room_timer_fire(self, code: str) -> None:
+        self.room_timers.pop(code, None)
+        room = self.game.rooms.get(code)
+        if not room:
+            return
+        rankings = room.tick()
+        if rankings:
+            asyncio.create_task(
+                persist_match_elo(room, rankings, notify=self.room_changed),
+                name=f"persist-{code}",
+            )
+
+    def _schedule_disconnect_forfeit(self, code: str, sid: str) -> None:
+        room = self.game.rooms.get(code)
+        if not room or room.visibility in ("solo", "local"):
+            return
+        if sid not in room.sessions:
+            return
+        loop = asyncio.get_running_loop()
+        handle = loop.call_later(DISCONNECT_GRACE, self._disconnect_forfeit, code, sid)
+        self.disconnect_timers[sid] = handle
+
+    def _disconnect_forfeit(self, code: str, sid: str) -> None:
+        self.disconnect_timers.pop(sid, None)
+        room = self.game.rooms.get(code)
+        if not room:
+            return
+        rankings = room.forfeit(sid)
+        if rankings:
+            asyncio.create_task(
+                persist_match_elo(room, rankings, notify=self.room_changed),
+                name=f"persist-forfeit-{sid}",
+            )
+
+    def purge_stale(self) -> None:
+        """Purge stale rooms/sessions and clean up associated timers/subscribers."""
+        stale_rooms, purged_sids = self.game.purge_stale()
+        for sid in purged_sids:
+            handle = self.disconnect_timers.pop(sid, None)
+            if handle:
+                handle.cancel()
+        for c in stale_rooms:
+            for ev in self.subscribers.pop(c, set()):
+                ev.set()
+            handle = self.room_timers.pop(c, None)
+            if handle:
+                handle.cancel()
 
 
-def count_sessions_for_ip(ip: str) -> int:
-    return sum(1 for s in sessions.values() if s.ip == ip)
+# ── HTTP helpers ──
 
 
-def make_session_id() -> str:
-    return secrets.token_urlsafe(16)
-
-
-def make_room_code() -> str:
-    chars = string.ascii_uppercase + string.digits
-    while True:
-        code = "".join(secrets.choice(chars) for _ in range(6))
-        if code not in rooms:
-            return code
-
-
-_NAME_RE = re.compile(r"[^A-Za-z0-9 '_-]")
-
-
-def clean_name(raw: str, fallback: str = "Player") -> str:
-    return _NAME_RE.sub("", raw).strip()[:24] or fallback
-
-
-def get_session(request: Request) -> Session | None:
+def get_session(state: ServerState, request: Request) -> Session | None:
     sid = request.cookies.get("session_id")
     if not sid:
         return None
-    return sessions.get(sid)
+    return state.game.sessions.get(sid)
 
 
 def require_session(
+    state: ServerState,
     request: Request,
     rate_key: str | None = None,
-) -> tuple[Session | None, HTMLResponse | None]:
-    """Rate-check + session + ownership in one call. Returns (session, error_response)."""
+) -> Session:
+    """Rate-check + session lookup. Raises HtmxError on failure."""
     if rate_key:
         ip = client_ip(request)
-        if not check_rate(ip, rate_key):
-            return None, HTMLResponse(
-                "<p class='feedback error'>Too many attempts. Try again later.</p>",
-                status_code=429,
-            )
-    sess = get_session(request)
+        if not state.game.check_rate(ip, rate_key):
+            raise HtmxError("Too many attempts. Try again later.", 429)
+    sess = get_session(state, request)
     if not sess:
-        return None, HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
-    return sess, None
+        raise HtmxError("Invalid session.", 403)
+    return sess
 
 
-def check_creation_limits(request: Request) -> HTMLResponse | None:
-    """Rate-check + stale purge + session-count guard. Returns error response or None."""
+def check_creation_limits(state: ServerState, request: Request) -> None:
+    """Rate-check + stale purge + session-count guard. Raises HtmxError on failure."""
     ip = client_ip(request)
-    if not check_rate(ip, "create_room"):
-        return HTMLResponse(
-            "<p class='feedback error'>Too many attempts. Try again later.</p>",
-            status_code=429,
-        )
-    purge_stale()
-    if count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
-        return HTMLResponse(
-            "<p class='feedback error'>Too many active sessions.</p>",
-            status_code=429,
-        )
-    return None
+    if not state.game.check_rate(ip, "create_room"):
+        raise HtmxError("Too many attempts. Try again later.", 429)
+    state.purge_stale()
+    if state.game.count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
+        raise HtmxError("Too many active sessions.", 429)
 
 
-def alive_sessions(room: Room) -> list[str]:
-    return [s for s in room.sessions if s not in room.eliminated]
+# ── Middleware ──
 
 
-def room_host_sid(room: Room) -> str | None:
-    """First alive session is the host."""
-    for sid in room.sessions:
-        if sid not in room.eliminated:
-            return sid
-    return None
+class BodyLimitMiddleware:
+    """Pure ASGI middleware — zero overhead for non-POST / static / SSE requests."""
 
+    def __init__(self, app: Any, max_bytes: int = MAX_BODY) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
 
-def active_session_id(room: Room) -> str | None:
-    alive = alive_sessions(room)
-    if not alive:
-        return None
-    idx = room.turn_index % len(alive)
-    return alive[idx]
-
-
-def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) -> float:
-    chars = max(len(word) / 5, 0.2)
-    wpm_required = 10.0 if multiplayer else 5 * streak**0.8 + 10
-    return max(3.0, (chars / wpm_required) * 60)
-
-
-def compute_wpm(guess: str, elapsed: float) -> float:
-    elapsed = max(elapsed, 2.0)
-    chars = max(len(guess) / 5, 0.2)
-    return min(300.0, chars / (elapsed / 60))
-
-
-def evaluate_guess(guess: str, word_entry: dict[str, Any]) -> tuple[bool, str | None]:
-    """Returns (correct, matched_homophone_or_None)."""
-    target = word_entry["word"].lower()
-    g = guess.strip().lower()
-    if g == target:
-        return True, None
-    for h in word_entry.get("homophones", []):
-        if g == h.lower():
-            return True, h
-    return False, None
-
-
-async def is_name_reserved(player_name: str, account_username: str | None) -> bool:
-    """Return True if player_name belongs to a registered account that isn't the current user."""
-    if not player_name or player_name == account_username:
-        return False
-    return await db.fetchone("SELECT 1 FROM users WHERE username = ?", (player_name,)) is not None
-
-
-async def _load_highest_tier(username: str) -> str:
-    row = await db.fetchone("SELECT tiers_cleared FROM users WHERE username=?", (username,))
-    if not row or not row["tiers_cleared"]:
-        return ""
-    tiers = [t for t in row["tiers_cleared"].split(",") if t in DIFFICULTIES]
-    return max(tiers, key=DIFFICULTIES.index) if tiers else ""
-
-
-async def record_guess_stats(
-    username: str | None,
-    wpm: float,
-    word_str: str,
-    correct: bool,
-    tier: str = "",
-    streak: int = 0,
-) -> None:
-    if not username:
-        return
-    async with db.transaction() as conn:
-        await conn.execute(
-            "INSERT INTO guess_log(username, word, correct, wpm, tier, ts) VALUES(?,?,?,?,?,?)",
-            (username, word_str, int(correct), wpm, tier, time.time()),
-        )
-        if correct and streak > 0:
-            await conn.execute(
-                "UPDATE users SET best_streak = MAX(best_streak, ?) WHERE username = ?",
-                (streak, username),
-            )
-
-
-# ── ELO ─
-
-
-def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
-    n = len(players)
-    if n < 2:
-        return
-    norm = n * (n - 1) / 2
-
-    def _exp(elo: float) -> float:
-        return math.exp(0.01 * min(elo, 5000))
-
-    denom = sum(_exp(p["elo"]) for p in players)
-    for p in players:
-        p["elo"] += k * ((n - p["rank"]) / norm - _exp(p["elo"]) / denom)
-
-
-# ── Rate limiter ──
-
-rate_buckets: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-
-RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "login": (5, 60),
-    "register": (3, 60),
-    "create_room": (5, 60),
-    "chat": (10, 30),
-    "guess": (60, 60),
-    "draft": (60, 60),
-}
-
-
-def check_rate(ip: str, action: str) -> bool:
-    limit, window = RATE_LIMITS[action]
-    now = time.time()
-    bucket = rate_buckets[ip][action]
-    bucket[:] = [t for t in bucket if now - t < window]
-    if len(bucket) >= limit:
-        return False
-    bucket.append(now)
-    return True
-
-
-# ── Middleware
-
-
-class BodyLimitMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        if request.method == "POST":
-            cl = request.headers.get("content-length")
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope.get("method") == "POST":
+            headers = dict(scope.get("headers", []))
+            cl = headers.get(b"content-length")
             if cl:
                 try:
-                    if int(cl) > MAX_BODY:
-                        return HTMLResponse(
-                            "<p class='error'>Request too large.</p>",
-                            status_code=413,
+                    if int(cl) > self.max_bytes:
+                        resp = HTMLResponse(
+                            "<p class='error'>Request too large.</p>", status_code=413,
                         )
+                        await resp(scope, receive, send)
+                        return
                 except ValueError:
-                    return HTMLResponse("<p class='error'>Invalid request.</p>", status_code=400)
-        return await call_next(request)
+                    resp = HTMLResponse(
+                        "<p class='error'>Invalid request.</p>", status_code=400,
+                    )
+                    await resp(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 # ── App ─
@@ -721,72 +229,34 @@ class BodyLimitMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     await db.init(DB_PATH)
+    _app.state.srv = ServerState()
     yield
     await db.close()
 
 
 app = FastAPI(lifespan=_lifespan)
-app.add_middleware(BodyLimitMiddleware)
+
+
+@app.exception_handler(HtmxError)
+async def htmx_error_handler(request: Request, exc: HtmxError) -> HTMLResponse:
+    return HTMLResponse(
+        f"<p class='feedback error'>{exc.message}</p>",
+        status_code=exc.status_code,
+    )
+
+
+app.add_middleware(BodyLimitMiddleware, max_bytes=MAX_BODY)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
-app.mount("/audios", StaticFiles(directory=str(ROOT / "audios")), name="audios")
-
-templates = Jinja2Templates(directory=str(ROOT / "templates"))
-templates.env.autoescape = True  # type: ignore[assignment]
-
-
-def _name_color(name: str) -> str:
-    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)
-    return f"hsl({h % 360}, 65%, 55%)"
-
-
-templates.env.filters["name_color"] = _name_color
-
-
-def _relative_time(ts: float) -> str:
-    d = time.time() - ts
-    if d < 60:
-        return "just now"
-    if d < 3600:
-        return f"{int(d // 60)}m ago"
-    if d < 86400:
-        return f"{int(d // 3600)}h ago"
-    return f"{int(d // 86400)}d ago"
-
-
-templates.env.filters["relative_time"] = _relative_time
-
-templates.env.globals["tier_colors"] = TIER_COLORS
-
-
-def client_ip(request: Request) -> str:
-    if request.client:
-        return request.client.host
-    return "unknown"
-
-
-def _catalog_ctx() -> dict[str, Any]:
-    return {
-        "difficulties": DIFFICULTIES,
-        "words": WORDS,
-        "total_words": TOTAL_WORDS,
-    }
-
-
-def tpl(request: Request, name: str, ctx: dict[str, Any] | None = None) -> HTMLResponse:
-    c: dict[str, Any] = {
-        "request": request,
-        "user": get_current_user(request),
-    }
-    if ctx:
-        c.update(ctx)
-    return templates.TemplateResponse(request, name, c)
-
+app.mount("/audios", ImmutableStaticFiles(directory=str(ROOT / "audios")), name="audios")
+app.include_router(auth_router)
+app.include_router(account_router)
 
 # ── Routes ───
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
+    state: ServerState = request.app.state.srv
     user = get_current_user(request)
     elo = None
     if user:
@@ -796,25 +266,23 @@ async def index(request: Request) -> HTMLResponse:
     # Reconnection: detect if session is still in an active room
     reconnect_code = None
     reconnect_mode = None
-    sess = get_session(request)
+    sess = get_session(state, request)
     if sess and sess.room_code:
-        rc_room = rooms.get(sess.room_code)
+        rc_room = state.game.rooms.get(sess.room_code)
         if rc_room:
             reconnect_code = sess.room_code
             vis = rc_room.visibility
-            reconnect_mode = (
-                vis if vis in ("solo", "local") else ("public" if vis == "public" else "lobby")
-            )
+            reconnect_mode = display_mode(vis)
     # Active games indicator
     active_games: list[dict[str, Any]] = []
     total_active_players = 0
-    for r in rooms.values():
+    for r in state.game.rooms.values():
         if r.current_word and not r.winner and r.visibility == "public":
             n = len(alive_sessions(r))
             if n > 0:
                 active_games.append({"difficulty": r.difficulty, "players": n})
                 total_active_players += n
-    return tpl(
+    return await tpl(
         request,
         "index.html",
         {
@@ -828,90 +296,21 @@ async def index(request: Request) -> HTMLResponse:
     )
 
 
-@app.post("/register", response_class=HTMLResponse)
-async def register(request: Request) -> HTMLResponse:
-    ip = client_ip(request)
-    if not check_rate(ip, "register"):
-        return HTMLResponse(
-            "<p class='feedback error'>Too many attempts. Try again later.</p>",
-            status_code=429,
-        )
-
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    password = str(form.get("password", ""))
-
-    def _err(msg: str) -> HTMLResponse:
-        return tpl(request, "fragments/menu.html", {"auth_error": msg})
-
-    if not re.match(r"^[A-Za-z0-9_]{3,24}$", username):
-        return _err("Username must be 3-24 characters (letters, numbers, underscore).")
-
-    if len(password) < 8 or len(password) > 128:
-        return _err("Password must be 8-128 characters.")
-
-    async with db.transaction() as conn:
-        cursor = await conn.execute("SELECT 1 FROM users WHERE username = ?", (username,))
-        if await cursor.fetchone():
-            return _err("Could not create account. Try a different username.")
-        pw_hash = hash_password(password)
-        await conn.execute(
-            "INSERT INTO users (username, pw_hash) VALUES (?, ?)", (username, pw_hash),
-        )
-
-    resp = tpl(request, "fragments/menu.html", {"user": username, "elo": 1000.0})
-    set_auth_cookie(resp, username)
-    return resp
-
-
-@app.post("/login", response_class=HTMLResponse)
-async def login(request: Request) -> HTMLResponse:
-    ip = client_ip(request)
-    if not check_rate(ip, "login"):
-        return HTMLResponse(
-            "<p class='feedback error'>Too many attempts. Try again later.</p>",
-            status_code=429,
-        )
-
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    password = str(form.get("password", ""))
-
-    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
-
-    if not row or not verify_password(password, row["pw_hash"]):
-        return tpl(
-            request,
-            "fragments/menu.html",
-            {"auth_error": "Unknown username or password."},
-        )
-
-    resp = tpl(request, "fragments/menu.html", {"user": row["username"], "elo": row["elo"]})
-    set_auth_cookie(resp, row["username"])
-    return resp
-
-
-@app.post("/logout", response_class=HTMLResponse)
-async def logout(request: Request) -> HTMLResponse:
-    resp = tpl(request, "fragments/menu.html", {"user": None})
-    resp.delete_cookie("auth", path="/")
-    return resp
-
-
 @app.post("/guess", response_class=HTMLResponse)
 async def guess(request: Request) -> HTMLResponse:
     """Handle guesses for all room modes."""
+    state: ServerState = request.app.state.srv
     ip = client_ip(request)
-    if not check_rate(ip, "guess"):
-        return HTMLResponse("<p class='feedback error'>Too many attempts.</p>", status_code=429)
+    if not state.game.check_rate(ip, "guess"):
+        raise HtmxError("Too many attempts.", 429)
 
     # Determine session: cookie-based for lobby/public/solo, local_sessions for local
-    sess = get_session(request)
+    sess = get_session(state, request)
     room: Room | None = None
     is_local = False
 
     if sess and sess.room_code:
-        room = rooms.get(sess.room_code)
+        room = state.game.rooms.get(sess.room_code)
         if room and room.visibility == "local":
             is_local = True
 
@@ -920,26 +319,37 @@ async def guess(request: Request) -> HTMLResponse:
         local_sids = request.cookies.get("local_sessions", "").split(",")
         active_sid = active_session_id(room)
         if active_sid not in local_sids:
-            return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
-        sess = sessions.get(active_sid)
+            raise HtmxError("Invalid session.", 403)
+        sess = state.game.sessions.get(active_sid)
 
     if not sess or not sess.room_code:
-        return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
+        raise HtmxError("Invalid session.", 403)
     if not room:
-        room = rooms.get(sess.room_code)
+        room = state.game.rooms.get(sess.room_code)
     if not room or active_session_id(room) != sess.id or not room.current_word:
         return Response(status_code=204)
 
     form = await request.form()
     guess_text = re.sub(r"[^A-Za-z]", "", str(form.get("guess", "")))[:MAX_WORD_LEN]
-    await room.submit_guess(sess, guess_text)
+    result, rankings = room.submit_guess(sess, guess_text)
+    if result:
+        await record_guess_stats(
+            sess.account_username,
+            result.wpm,
+            result.word,
+            result.correct,
+            tier=result.tier,
+            streak=sess.streak,
+        )
+    if rankings:
+        await persist_match_elo(room, rankings, notify=state.room_changed)
 
     if room.visibility in ("solo", "local") and is_local:
         active_sid_val = active_session_id(room)
-        viewer = sessions.get(active_sid_val) if active_sid_val else sess
+        viewer = state.game.sessions.get(active_sid_val) if active_sid_val else sess
     else:
         viewer = sess
-    return tpl(request, "fragments/room.html", build_room_ctx(request, room, viewer))
+    return await tpl(request, "fragments/room.html", build_room_ctx(state, room, viewer))
 
 
 # ── Room creation / joining
@@ -947,52 +357,46 @@ async def guess(request: Request) -> HTMLResponse:
 
 @app.post("/room/create", response_class=HTMLResponse)
 async def room_create(request: Request) -> HTMLResponse:
-    err = check_creation_limits(request)
-    if err:
-        return err
+    state: ServerState = request.app.state.srv
+    check_creation_limits(state, request)
 
     form = await request.form()
-    difficulty = str(form.get("difficulty", DIFFICULTIES[0]))
-    if difficulty not in DIFFICULTIES and difficulty != "randomizer":
-        difficulty = DIFFICULTIES[0]
-    visibility = str(form.get("visibility", "private"))
-    if visibility not in ("private", "solo", "local"):
-        visibility = "private"
+    difficulty = validate_difficulty(str(form.get("difficulty", DIFFICULTIES[0])))
+    visibility: Visibility = "private"
+    raw_vis = str(form.get("visibility", "private"))
+    if raw_vis in ("private", "solo", "local"):
+        visibility = raw_vis  # type: ignore[assignment]
 
     ip = client_ip(request)
     user = get_current_user(request)
-    code = make_room_code()
+    code = state.game.make_room_code()
 
     if visibility == "local":
-        raw = json.loads(str(form.get("players", "[]")))
+        try:
+            raw = json.loads(str(form.get("players", "[]")))
+        except (json.JSONDecodeError, ValueError):
+            raise HtmxError("Invalid player list.", 400)
         if not isinstance(raw, list) or not raw or not all(isinstance(n, str) for n in raw):
-            return HTMLResponse(
-                "<p class='feedback error'>Invalid player list.</p>",
-                status_code=400,
-            )
+            raise HtmxError("Invalid player list.", 400)
         names: list[str] = raw
-        room = Room(code=code, difficulty=difficulty, visibility="local")
+        room = state.make_room(code, difficulty, "local")
         all_sids: list[str] = []
         first_sess: Session | None = None
         for i, name in enumerate(names[:MAX_LOCAL_PLAYERS]):
-            sid = make_session_id()
-            sess = Session(
-                id=sid,
-                player_name=clean_name(name, f"Player {i + 1}"),
-                difficulty=difficulty,
-                room_code=code,
-                ip=ip,
+            sess = state.game.add_player_to_room(
+                room,
+                clean_name(name, f"Player {i + 1}"),
+                difficulty,
+                ip,
             )
-            sessions[sid] = sess
-            room.sessions.append(sid)
-            all_sids.append(sid)
+            all_sids.append(sess.id)
             if first_sess is None:
                 first_sess = sess
-        rooms[code] = room
+        state.game.rooms[code] = room
         room.serve_new_word()
         active_sid = active_session_id(room)
-        viewer = sessions[active_sid] if active_sid else first_sess
-        resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, viewer))
+        viewer = state.game.sessions.get(active_sid) if active_sid else first_sess
+        resp = await tpl(request, "fragments/room.html", build_room_ctx(state, room, viewer))
         resp.set_cookie("session_id", first_sess.id, httponly=True, samesite="lax", path="/")
         resp.set_cookie(
             "local_sessions",
@@ -1009,42 +413,36 @@ async def room_create(request: Request) -> HTMLResponse:
         return HTMLResponse(
             "<p class='feedback error'>That name belongs to a registered account.</p>",
         )
-    sid = make_session_id()
-    is_solo = visibility == "solo"
-    sess = Session(
-        id=sid,
-        player_name=player_name,
-        difficulty=difficulty,
-        room_code=code,
-        account_username=user,
-        ip=ip,
+    room = state.make_room(code, difficulty, visibility)
+    state.game.rooms[code] = room
+    highest_tier = await _load_highest_tier(user) if user else ""
+    sess = state.game.add_player_to_room(
+        room,
+        player_name,
+        difficulty,
+        ip,
+        account=user,
+        highest_tier=highest_tier,
     )
-    if user:
-        sess.highest_tier = await _load_highest_tier(user)
-    sessions[sid] = sess
 
-    room = Room(code=code, difficulty=difficulty, visibility=visibility, sessions=[sid])
-    rooms[code] = room
-
-    if is_solo:
+    if visibility == "solo":
         room.serve_new_word()
 
-    resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
-    resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
+    resp = await tpl(request, "fragments/room.html", build_room_ctx(state, room, sess))
+    resp.set_cookie("session_id", sess.id, httponly=True, samesite="lax", path="/")
     return resp
 
 
 @app.post("/room/join", response_class=HTMLResponse)
 async def room_join(request: Request) -> HTMLResponse:
-    err = check_creation_limits(request)
-    if err:
-        return err
+    state: ServerState = request.app.state.srv
+    check_creation_limits(state, request)
 
     form = await request.form()
     code = re.sub(r"[^A-Z0-9]", "", str(form.get("room_code", "")).upper())[:6]
     player_name = clean_name(str(form.get("player_name", "")))
 
-    room = rooms.get(code)
+    room = state.game.rooms.get(code)
     if not room:
         return HTMLResponse("<p class='feedback error'>Room not found.</p>")
     if room.locked:
@@ -1058,112 +456,85 @@ async def room_join(request: Request) -> HTMLResponse:
             "<p class='feedback error'>That name belongs to a registered account.</p>",
         )
     ip = client_ip(request)
-    sid = make_session_id()
-    sess = Session(
-        id=sid,
-        player_name=player_name,
-        difficulty=room.difficulty,
-        room_code=code,
-        account_username=user,
-        ip=ip,
+    highest_tier = await _load_highest_tier(user) if user else ""
+    sess = state.game.add_player_to_room(
+        room,
+        player_name,
+        room.difficulty,
+        ip,
+        account=user,
+        highest_tier=highest_tier,
     )
-    if user:
-        sess.highest_tier = await _load_highest_tier(user)
-    sessions[sid] = sess
-    room.sessions.append(sid)
-    room.last_activity = time.time()
+    room.notify_or_begin()
 
-    # If this is the second player joining a waiting room, start the game
-    if len(room.sessions) == 2 and not room.current_word:
-        room.begin_game()
-    else:
-        room_changed(code)
-
-    resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
-    resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
+    resp = await tpl(request, "fragments/room.html", build_room_ctx(state, room, sess))
+    resp.set_cookie("session_id", sess.id, httponly=True, samesite="lax", path="/")
     return resp
 
 
 @app.post("/public/join", response_class=HTMLResponse)
 async def public_join(request: Request) -> HTMLResponse:
+    state: ServerState = request.app.state.srv
     ip = client_ip(request)
-    if not check_rate(ip, "create_room"):
-        return HTMLResponse(
-            "<p class='feedback error'>Too many attempts. Try again later.</p>",
-            status_code=429,
-        )
+    if not state.game.check_rate(ip, "create_room"):
+        raise HtmxError("Too many attempts. Try again later.", 429)
 
     user = get_current_user(request)
     if not user:
-        return HTMLResponse(
-            "<p class='feedback error'>Login required for Public Arena.</p>",
-            status_code=403,
-        )
+        raise HtmxError("Login required for Public Arena.", 403)
 
-    if count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
-        return HTMLResponse(
-            "<p class='feedback error'>Too many active sessions.</p>",
-            status_code=429,
-        )
+    if state.game.count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
+        raise HtmxError("Too many active sessions.", 429)
 
     form = await request.form()
-    difficulty = str(form.get("difficulty", DIFFICULTIES[0]))
-    if difficulty not in DIFFICULTIES and difficulty != "randomizer":
-        difficulty = DIFFICULTIES[0]
+    difficulty = validate_difficulty(str(form.get("difficulty", DIFFICULTIES[0])))
 
-    purge_stale()
+    state.purge_stale()
 
     # Find existing public room for this difficulty
     target_room: Room | None = None
-    for r in rooms.values():
+    for r in state.game.rooms.values():
         if (
             r.visibility == "public"
             and r.difficulty == difficulty
             and len(r.sessions) < MAX_PLAYERS
         ):
-            await r.tick()
+            rankings = r.tick()
+            if rankings:
+                await persist_match_elo(r, rankings, notify=state.room_changed)
             if not r.winner:
                 target_room = r
                 break
 
-    sid = make_session_id()
     if target_room is None:
-        code = make_room_code()
-        target_room = Room(code=code, difficulty=difficulty, visibility="public", sessions=[])
-        rooms[code] = target_room
+        code = state.game.make_room_code()
+        target_room = state.make_room(code, difficulty, "public")
+        state.game.rooms[code] = target_room
 
-    sess = Session(
-        id=sid,
-        player_name=user,
-        difficulty=difficulty,
-        room_code=target_room.code,
-        account_username=user,
-        ip=ip,
+    highest_tier = await _load_highest_tier(user)
+    sess = state.game.add_player_to_room(
+        target_room,
+        user,
+        difficulty,
+        ip,
+        account=user,
+        highest_tier=highest_tier,
     )
-    if user:
-        sess.highest_tier = await _load_highest_tier(user)
-    sessions[sid] = sess
-    target_room.sessions.append(sid)
-    target_room.last_activity = time.time()
+    target_room.notify_or_begin()
 
-    if len(target_room.sessions) == 2 and not target_room.current_word:
-        target_room.begin_game()
-    else:
-        room_changed(target_room.code)
-
-    resp = tpl(request, "fragments/room.html", build_room_ctx(request, target_room, sess))
-    resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
+    resp = await tpl(request, "fragments/room.html", build_room_ctx(state, target_room, sess))
+    resp.set_cookie("session_id", sess.id, httponly=True, samesite="lax", path="/")
     return resp
 
 
-def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, Any]:
+def build_room_ctx(state: ServerState, room: Room, viewer: Session) -> dict[str, Any]:
     active_sid = active_session_id(room)
     is_active = viewer.id == active_sid
-    active_sess = sessions.get(active_sid) if active_sid else None
+    active_sess = state.game.sessions.get(active_sid) if active_sid else None
 
     players: list[dict[str, Any]] = []
     for sid in room.sessions:
-        s = sessions.get(sid)
+        s = state.game.sessions.get(sid)
         if not s:
             continue
         status = "Waiting"
@@ -1200,9 +571,7 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         "players": players,
         "is_active": is_active,
         "active_player_name": active_sess.player_name if active_sess else "",
-        "mode": room.visibility
-        if room.visibility in ("solo", "local")
-        else ("public" if room.visibility == "public" else "lobby"),
+        "mode": display_mode(room.visibility),
         "chat": list(room.chat),
         "waiting_for_players": len(room.sessions) < 2 and not room.current_word,
         "is_host": viewer.id == room_host_sid(room),
@@ -1261,58 +630,61 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
 
 @app.get("/room/{code}", response_class=HTMLResponse)
 async def room_poll(request: Request, code: str) -> HTMLResponse:
-    room = rooms.get(code)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room:
         return HTMLResponse("<p class='feedback error'>Room not found.</p>", status_code=404)
 
-    sess = get_session(request)
+    sess = get_session(state, request)
     if not sess or sess.room_code != code:
         return HTMLResponse("<p class='feedback error'>Not in this room.</p>", status_code=403)
 
-    return tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
+    return await tpl(request, "fragments/room.html", build_room_ctx(state, room, sess))
 
 
 @app.get("/room/{code}/stream")
 async def room_stream(request: Request, code: str):
-    room = rooms.get(code)
-    sess = get_session(request)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
+    sess = get_session(state, request)
     if not room or not sess or sess.room_code != code:
         return Response(status_code=403)
 
     sid = sess.id
 
     # Cancel any pending disconnect timer (player is reconnecting)
-    handle = disconnect_timers.pop(sid, None)
+    handle = state.disconnect_timers.pop(sid, None)
     if handle:
         handle.cancel()
 
     ev = asyncio.Event()
-    room_subscribers[code].add(ev)
+    state.subscribers[code].add(ev)
 
     async def gen():
         try:
             yield {"event": "refresh", "data": ""}
-            while code in rooms:
+            while code in state.game.rooms:
                 ev.clear()
                 await ev.wait()
                 yield {"event": "refresh", "data": ""}
         finally:
-            room_subscribers[code].discard(ev)
-            if code in room_subscribers and not room_subscribers[code]:
-                del room_subscribers[code]
-            _schedule_disconnect_forfeit(code, sid)
+            state.subscribers[code].discard(ev)
+            if code in state.subscribers and not state.subscribers[code]:
+                del state.subscribers[code]
+            state._schedule_disconnect_forfeit(code, sid)
 
     return EventSourceResponse(gen(), ping=15)
 
 
 @app.post("/room/{code}/draft")
 async def room_draft(request: Request, code: str) -> Response:
-    room = rooms.get(code)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room:
         return Response(status_code=404)
 
-    sess, err = require_session(request, "draft")
-    if err or not sess or sess.room_code != code:
+    sess = require_session(state, request, "draft")
+    if sess.room_code != code:
         return Response(status_code=403)
     if active_session_id(room) != sess.id:
         return Response(status_code=403)
@@ -1324,8 +696,9 @@ async def room_draft(request: Request, code: str) -> Response:
 
 
 @app.get("/room/{code}/draft-text")
-async def get_draft_text(code: str, h: str = "") -> Response:
-    room = rooms.get(code)
+async def get_draft_text(request: Request, code: str, h: str = "") -> Response:
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room:
         return Response(status_code=404)
     if h == room.draft_text:
@@ -1335,15 +708,14 @@ async def get_draft_text(code: str, h: str = "") -> Response:
 
 @app.post("/room/{code}/chat", response_class=HTMLResponse)
 async def room_chat(request: Request, code: str) -> HTMLResponse:
-    room = rooms.get(code)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room:
         return HTMLResponse("<p class='feedback error'>Room not found.</p>", status_code=404)
 
-    sess, err = require_session(request, "chat")
-    if err:
-        return err
-    if not sess or sess.room_code != code:
-        return HTMLResponse("<p class='feedback error'>Not in this room.</p>", status_code=403)
+    sess = require_session(state, request, "chat")
+    if sess.room_code != code:
+        raise HtmxError("Not in this room.", 403)
 
     form = await request.form()
     msg = str(form.get("message", "")).strip()[:MAX_CHAT_LEN]
@@ -1355,30 +727,32 @@ async def room_chat(request: Request, code: str) -> HTMLResponse:
 
 @app.post("/room/{code}/lock")
 async def room_lock_toggle(request: Request, code: str) -> Response:
-    room = rooms.get(code)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room or room.visibility != "private":
         return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
-    sess, err = require_session(request)
-    if err or not sess or sess.room_code != code:
-        return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
+    sess = require_session(state, request)
+    if sess.room_code != code:
+        raise HtmxError("Invalid session.", 403)
     if sess.id != room_host_sid(room):
-        return HTMLResponse(
-            "<p class='feedback error'>Only the host can lock.</p>", status_code=403,
-        )
+        raise HtmxError("Only the host can lock.", 403)
     room.toggle_lock()
     return Response(status_code=204)
 
 
 @app.post("/forfeit", response_class=HTMLResponse)
 async def forfeit(request: Request) -> HTMLResponse:
-    sess, err = require_session(request)
-    if err:
+    state: ServerState = request.app.state.srv
+    sess = get_session(state, request)
+    if not sess:
         return HTMLResponse("")
 
     if sess.room_code:
-        room = rooms.get(sess.room_code)
+        room = state.game.rooms.get(sess.room_code)
         if room and sess.id in room.sessions:
-            await room.forfeit(sess.id)
+            rankings = room.forfeit(sess.id)
+            if rankings:
+                await persist_match_elo(room, rankings, notify=state.room_changed)
 
     sess.room_code = None
     return HTMLResponse("")
@@ -1387,7 +761,8 @@ async def forfeit(request: Request) -> HTMLResponse:
 @app.post("/room/{code}/restart", response_class=HTMLResponse)
 async def room_restart(request: Request, code: str) -> HTMLResponse:
     """Restart a solo/local game."""
-    room = rooms.get(code)
+    state: ServerState = request.app.state.srv
+    room = state.game.rooms.get(code)
     if not room or room.visibility not in ("solo", "local"):
         return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
 
@@ -1397,79 +772,23 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
         if not any(sid in room.sessions for sid in local_sids):
             return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
     else:
-        sess = get_session(request)
+        sess = get_session(state, request)
         if not sess or sess.room_code != code:
             return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
 
     for sid in room.sessions:
-        if sid in sessions:
-            sessions[sid].streak = 0
+        s = state.game.sessions.get(sid)
+        if s:
+            s.streak = 0
     room.start_new_game()
 
     active_sid = active_session_id(room)
-    viewer = sessions.get(active_sid) if active_sid else sessions.get(room.sessions[0])
-    return tpl(request, "fragments/room.html", build_room_ctx(request, room, viewer))
-
-
-@app.get("/leaderboard", response_class=HTMLResponse)
-async def leaderboard(request: Request) -> HTMLResponse:
-    rows = await db.fetchall(
-        "SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak, tiers_cleared"
-        " FROM users ORDER BY elo DESC LIMIT 100",
+    viewer = (
+        state.game.sessions.get(active_sid)
+        if active_sid
+        else state.game.sessions.get(room.sessions[0])
     )
-    return tpl(request, "fragments/leaderboard.html", {"players": rows})
-
-
-async def _account_ctx(row: db.Row) -> dict[str, Any]:
-    username = row["username"]
-    recent = await db.fetchall(
-        "SELECT word, correct, wpm, tier, ts FROM guess_log "
-        "WHERE username=? ORDER BY ts DESC LIMIT 20",
-        (username,),
-    )
-    practice = await db.fetchall(
-        "SELECT word, COUNT(*) as n FROM guess_log "
-        "WHERE username=? AND correct=0 GROUP BY word ORDER BY n DESC LIMIT 10",
-        (username,),
-    )
-    practice_enriched = [
-        {
-            "word": r["word"],
-            "n": r["n"],
-            "definition": ALL_WORDS.get(r["word"], {}).get("definition", ""),
-        }
-        for r in practice
-    ]
-    avg_row = await db.fetchone(
-        "SELECT AVG(wpm) as avg_wpm FROM (SELECT wpm FROM guess_log "
-        "WHERE username=? AND correct=1 ORDER BY ts DESC LIMIT 50)",
-        (username,),
-    )
-    avg_wpm = round(avg_row["avg_wpm"], 1) if avg_row and avg_row["avg_wpm"] else 0
-    return {
-        "recent": recent,
-        "practice": practice_enriched,
-        "avg_wpm": avg_wpm,
-    }
-
-
-@app.get("/account/{username}", response_class=HTMLResponse)
-async def account_view(request: Request, username: str) -> HTMLResponse:
-    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
-    if not row:
-        return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
-    return tpl(request, "fragments/account.html", {"player": row, **(await _account_ctx(row))})
-
-
-@app.get("/account", response_class=HTMLResponse)
-async def own_account(request: Request) -> HTMLResponse:
-    user = get_current_user(request)
-    if not user:
-        return HTMLResponse("<p class='feedback error'>Not logged in.</p>", status_code=403)
-    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (user,))
-    if not row:
-        return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
-    return tpl(request, "fragments/account.html", {"player": row, **(await _account_ctx(row))})
+    return await tpl(request, "fragments/room.html", build_room_ctx(state, room, viewer))
 
 
 if __name__ == "__main__":
