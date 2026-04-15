@@ -534,7 +534,7 @@
         "pseudopseudohypoparathyroidism": {"part_of_speech": "noun", "definition": "an inherited condition resembling a hormone deficiency without the biochemical cause", "homophones": []},
         "quattuorquinquagintaquadringentillion": {"part_of_speech": "number", "definition": "a one followed by 1,365 zeroes", "homophones": []},
         "radioimmunoelectrophoresis": {"part_of_speech": "noun", "definition": "a laboratory method combining antibodies and electric fields to identify proteins", "homophones": []},
-        "ribulosebisphosphatecarboxylaseoxygenase": {"part_of_speech": "noun", "definition": "the primary enzyme responsible for carbon fixation in plants", "homophones": []},
+        "ribulosebisphosphatecarboxylaseoxygenase": {"part_of_speech": "noun", "definition": "the primary enzyme responsible for carbon fixation in plants", "homophones": ["ribulose-bisphosphate-carboxylase-oxygenase","ribulose bisphosphate carboxylase-oxygenase"]},
         "stereoelectroencephalography": {"part_of_speech": "noun", "definition": "an invasive medical technique for precisely locating electrical activity within the brain", "homophones": []},
         "supercalifragilisticexpialidocious": {"part_of_speech": "adjective", "definition": "wonderful", "homophones": []},
         "thermoanaerobacterthermohydrosulfuricus": {"part_of_speech": "noun", "definition": "a bacterium which can thrive in high-temperature environments", "homophones": ["thermoanaerobacter thermohydrosulfuricus"]},
