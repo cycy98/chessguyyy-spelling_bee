@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import json
 import math
 import re
 import secrets
-import sqlite3
 import string
-import threading
 import time
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,12 +23,13 @@ from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from backend import db
+from backend.auth import hash_password, verify_password, get_current_user, set_auth_cookie
+
 # ── Config ───
 
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "spellingbee.db"
-SECRET = secrets.token_bytes(32)
-COOKIE_MAX_AGE = 7 * 24 * 3600
 MAX_BODY = 8 * 1024
 MAX_CHAT = 80
 MAX_CHAT_LEN = 150
@@ -73,157 +72,7 @@ def has_audio(word: str) -> bool:
     return (ROOT / "audios" / f"{word.lower()}.mp3").exists()
 
 
-# ── Database ─
-
-db = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-db.row_factory = sqlite3.Row
-db.execute("PRAGMA journal_mode = WAL")
-db.execute("PRAGMA foreign_keys = ON")
-db.execute("PRAGMA busy_timeout = 5000")
-db.executescript("""
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS users (
-    username      TEXT    PRIMARY KEY,
-    pw_hash       TEXT    NOT NULL,
-    elo           REAL    NOT NULL DEFAULT 1000.0 CHECK(elo >= 0),
-    games         INTEGER NOT NULL DEFAULT 0      CHECK(games >= 0),
-    wins          INTEGER NOT NULL DEFAULT 0      CHECK(wins >= 0),
-    words         INTEGER NOT NULL DEFAULT 0      CHECK(words >= 0),
-    correct       INTEGER NOT NULL DEFAULT 0      CHECK(correct >= 0),
-    best_wpm      INTEGER NOT NULL DEFAULT 0      CHECK(best_wpm >= 0),
-    best_word     TEXT    NOT NULL DEFAULT '',
-    best_streak   INTEGER NOT NULL DEFAULT 0      CHECK(best_streak >= 0),
-    tiers_cleared TEXT    NOT NULL DEFAULT ''
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS guess_log (
-    id       INTEGER PRIMARY KEY,
-    username TEXT    NOT NULL REFERENCES users(username) ON DELETE CASCADE,
-    word     TEXT    NOT NULL,
-    correct  INTEGER NOT NULL CHECK(correct IN (0, 1)),
-    wpm      REAL    NOT NULL CHECK(wpm >= 0),
-    tier     TEXT    NOT NULL,
-    ts       REAL    NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS ix_gl_user_ts ON guess_log(username, ts);
-
-CREATE TABLE IF NOT EXISTS match_results (
-    id       INTEGER PRIMARY KEY,
-    username TEXT    NOT NULL REFERENCES users(username) ON DELETE CASCADE,
-    rank     INTEGER NOT NULL CHECK(rank >= 1),
-    players  INTEGER NOT NULL CHECK(players >= 2),
-    ts       REAL    NOT NULL
-) STRICT;
-
-CREATE TRIGGER IF NOT EXISTS trg_guess_stats
-AFTER INSERT ON guess_log
-BEGIN
-    UPDATE users SET
-        words    = words + 1,
-        correct  = correct + NEW.correct,
-        best_wpm = MAX(best_wpm, CASE WHEN NEW.correct
-                       THEN CAST(NEW.wpm AS INTEGER) ELSE 0 END),
-        best_word = CASE
-            WHEN NEW.correct AND CAST(NEW.wpm AS INTEGER) > best_wpm
-            THEN NEW.word ELSE best_word END
-    WHERE username = NEW.username;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_tier_cleared
-AFTER INSERT ON guess_log
-WHEN NEW.correct = 1 AND NEW.tier != ''
-BEGIN
-    UPDATE users SET tiers_cleared = CASE
-        WHEN tiers_cleared = '' THEN NEW.tier
-        WHEN instr(',' || tiers_cleared || ',', ',' || NEW.tier || ',') > 0
-            THEN tiers_cleared
-        ELSE tiers_cleared || ',' || NEW.tier
-    END
-    WHERE username = NEW.username;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_match_stats
-AFTER INSERT ON match_results
-BEGIN
-    UPDATE users SET
-        games = games + 1,
-        wins  = wins + (NEW.rank = 1)
-    WHERE username = NEW.username;
-END;
-""")
-db.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version', '1')")
-db.commit()
-_db_lock = threading.Lock()
-
-
-# ── Password hashing ─
-
-
-def hash_password(pw: str) -> str:
-    salt = secrets.token_bytes(16)
-    h = hashlib.scrypt(pw.encode(), salt=salt, n=16384, r=8, p=1)
-    return salt.hex() + ":" + h.hex()
-
-
-def verify_password(pw: str, stored: str) -> bool:
-    salt_hex, hash_hex = stored.split(":")
-    salt = bytes.fromhex(salt_hex)
-    h = hashlib.scrypt(pw.encode(), salt=salt, n=16384, r=8, p=1)
-    return hmac.compare_digest(h.hex(), hash_hex)
-
-
-# ── Auth tokens ───
-
-
-def make_token(username: str) -> str:
-    expiry = str(int(time.time()) + COOKIE_MAX_AGE)
-    payload = f"{username}:{expiry}"
-    sig = hmac.new(SECRET, payload.encode(), "sha256").hexdigest()
-    return f"{payload}:{sig}"
-
-
-def verify_token(token: str) -> str | None:
-    parts = token.rsplit(":", 2)
-    if len(parts) != 3:
-        return None
-    username, expiry_str, sig = parts
-    try:
-        if int(expiry_str) < time.time():
-            return None
-    except ValueError:
-        return None
-    expected = hmac.new(SECRET, f"{username}:{expiry_str}".encode(), "sha256").hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        return None
-    return username
-
-
-def get_current_user(request: Request) -> str | None:
-    token = request.cookies.get("auth")
-    if not token:
-        return None
-    return verify_token(token)
-
-
-def set_auth_cookie(response: Response, username: str) -> None:
-    response.set_cookie(
-        "auth",
-        make_token(username),
-        max_age=COOKIE_MAX_AGE,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
-
-
 # ── In-memory state ──
-
-
 @dataclass
 class Session:
     id: str
@@ -275,7 +124,7 @@ class Room:
         self.turn_deadline = time.time() + tl
         _arm_room_timer(self.code)
 
-    def check_timeout(self) -> bool:
+    async def check_timeout(self) -> bool:
         """Check and handle timeout. Returns True if someone was eliminated."""
         if self.winner or self.intermission_until > time.time():
             return False
@@ -290,13 +139,13 @@ class Room:
         if sess:
             sess.last_feedback = feedback("Time's up", "Counted as a skip.")
         self.eliminated.add(active_sid)
-        self.advance_turn(eliminated=True)
+        await self.advance_turn(eliminated=True)
         return True
 
-    def advance_turn(self, eliminated: bool = False) -> None:
+    async def advance_turn(self, eliminated: bool = False) -> None:
         alive = alive_sessions(self)
         if len(alive) <= 1:
-            self.finish_game()
+            await self.finish_game()
             return
         if not eliminated:
             self.turn_index = (self.turn_index + 1) % len(alive)
@@ -306,7 +155,7 @@ class Room:
         self.serve_new_word()
         self.last_activity = time.time()
 
-    def finish_game(self) -> None:
+    async def finish_game(self) -> None:
         alive = alive_sessions(self)
         winner_sid = alive[0] if alive else None
         winner_sess = sessions.get(winner_sid) if winner_sid else None
@@ -339,13 +188,14 @@ class Room:
 
         tracked: list[dict[str, Any]] = []
         if self.visibility != "local":
-            with _db_lock:
+            async with db.transaction() as conn:
                 for r in rankings:
                     if r["account"]:
-                        row = db.execute(
+                        cursor = await conn.execute(
                             "SELECT * FROM users WHERE username = ?",
                             (r["account"],),
-                        ).fetchone()
+                        )
+                        row = await cursor.fetchone()
                         if row:
                             tracked.append(
                                 {
@@ -359,15 +209,14 @@ class Room:
                     n_players = len(tracked)
                     now = time.time()
                     for t in tracked:
-                        db.execute(
+                        await conn.execute(
                             "UPDATE users SET elo = ? WHERE username = ?",
                             (t["elo"], t["account"]),
                         )
-                        db.execute(
+                        await conn.execute(
                             "INSERT INTO match_results(username, rank, players, ts) VALUES(?,?,?,?)",
                             (t["account"], t["rank"], n_players, now),
                         )
-                    db.commit()
 
         self.last_match_results = []
         for r in rankings:
@@ -401,9 +250,9 @@ class Room:
     def _notify(self) -> None:
         room_changed(self.code)
 
-    def tick(self) -> None:
+    async def tick(self) -> None:
         """Check timeout and intermission — call before building context."""
-        changed = self.check_timeout()
+        changed = await self.check_timeout()
         if self.intermission_until and time.time() >= self.intermission_until and self.winner:
             self.start_new_game()  # calls _notify
             return
@@ -428,7 +277,7 @@ class Room:
         self.locked = not self.locked
         self._notify()
 
-    def submit_guess(self, sess: "Session", guess_text: str) -> None:
+    async def submit_guess(self, sess: Session, guess_text: str) -> None:
         """Evaluate a guess and update game state. Mutates sess and self."""
         word_data = self.current_word
         if not word_data:
@@ -448,7 +297,7 @@ class Room:
             if not guess_text:
                 sess.streak = 0
                 sess.last_feedback = feedback("Skipped", f"Answer: {word_str}.")
-                record_guess_stats(
+                await record_guess_stats(
                     sess.account_username,
                     0,
                     word_str,
@@ -465,7 +314,7 @@ class Room:
                     if homophone:
                         body = f'Accepted as "{homophone}". {wpm} WPM.'
                     sess.last_feedback = feedback("Correct", body, "success")
-                    record_guess_stats(
+                    await record_guess_stats(
                         sess.account_username,
                         wpm,
                         word_str,
@@ -483,7 +332,7 @@ class Room:
                 else:
                     sess.streak = 0
                     sess.last_feedback = feedback("Incorrect", f"Answer: {word_str}. {wpm} WPM.")
-                    record_guess_stats(
+                    await record_guess_stats(
                         sess.account_username,
                         wpm,
                         word_str,
@@ -494,7 +343,7 @@ class Room:
             self.serve_new_word(streak=sess.streak)
         elif not guess_text:
             sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {word_str}.")
-            record_guess_stats(
+            await record_guess_stats(
                 sess.account_username,
                 0,
                 word_str,
@@ -503,7 +352,7 @@ class Room:
                 streak=sess.streak,
             )
             self.eliminated.add(sess.id)
-            self.advance_turn(eliminated=True)
+            await self.advance_turn(eliminated=True)
         else:
             correct, homophone = evaluate_guess(guess_text, word_data)
             if correct:
@@ -512,7 +361,7 @@ class Room:
                 if homophone:
                     body = f'Accepted as "{homophone}". {body}'
                 sess.last_feedback = feedback("Correct", body, "success")
-                record_guess_stats(
+                await record_guess_stats(
                     sess.account_username,
                     wpm,
                     word_str,
@@ -527,10 +376,10 @@ class Room:
                         or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
                     ):
                         sess.highest_tier = t
-                self.advance_turn(eliminated=False)
+                await self.advance_turn(eliminated=False)
             else:
                 sess.last_feedback = feedback("Eliminated", f"Answer: {word_str}.")
-                record_guess_stats(
+                await record_guess_stats(
                     sess.account_username,
                     wpm,
                     word_str,
@@ -539,10 +388,10 @@ class Room:
                     streak=sess.streak,
                 )
                 self.eliminated.add(sess.id)
-                self.advance_turn(eliminated=True)
+                await self.advance_turn(eliminated=True)
         self._notify()
 
-    def forfeit(self, sid: str) -> None:
+    async def forfeit(self, sid: str) -> None:
         """Remove a player who forfeits. Handles turn advancement and new word."""
         if sid not in self.sessions:
             return
@@ -552,7 +401,7 @@ class Room:
         self.sessions.remove(sid)
         alive = alive_sessions(self)
         if len(alive) <= 1 and self.current_word and not self.winner:
-            self.finish_game()
+            await self.finish_game()
         elif was_active and alive:
             # Forfeiter held the turn — wrap index and serve a fresh word
             self.turn_index = self.turn_index % len(alive)
@@ -603,7 +452,7 @@ def _room_timer_fire(code: str) -> None:
     room_timers.pop(code, None)
     room = rooms.get(code)
     if room:
-        room.tick()
+        asyncio.create_task(room.tick(), name=f"tick-{code}")
 
 
 def _schedule_disconnect_forfeit(code: str, sid: str) -> None:
@@ -621,7 +470,7 @@ def _disconnect_forfeit(code: str, sid: str) -> None:
     disconnect_timers.pop(sid, None)
     room = rooms.get(code)
     if room:
-        room.forfeit(sid)  # no-op if sid not in sessions
+        asyncio.create_task(room.forfeit(sid), name=f"forfeit-{sid}")
 
 
 def feedback(title: str, body: str, type: str = "error") -> dict[str, str]:
@@ -679,7 +528,7 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9 '_-]")
 
 
 def clean_name(raw: str, fallback: str = "Player") -> str:
-    return _NAME_RE.sub('', raw).strip()[:24] or fallback
+    return _NAME_RE.sub("", raw).strip()[:24] or fallback
 
 
 def get_session(request: Request) -> Session | None:
@@ -687,7 +536,6 @@ def get_session(request: Request) -> Session | None:
     if not sid:
         return None
     return sessions.get(sid)
-
 
 
 def require_session(
@@ -769,26 +617,22 @@ def evaluate_guess(guess: str, word_entry: dict[str, Any]) -> tuple[bool, str | 
     return False, None
 
 
-def is_name_reserved(player_name: str, account_username: str | None) -> bool:
+async def is_name_reserved(player_name: str, account_username: str | None) -> bool:
     """Return True if player_name belongs to a registered account that isn't the current user."""
     if not player_name or player_name == account_username:
         return False
-    with _db_lock:
-        return (
-            db.execute("SELECT 1 FROM users WHERE username = ?", (player_name,)).fetchone()
-            is not None
-        )
+    return await db.fetchone("SELECT 1 FROM users WHERE username = ?", (player_name,)) is not None
 
 
-def _load_highest_tier(username: str) -> str:
-    row = db.execute("SELECT tiers_cleared FROM users WHERE username=?", (username,)).fetchone()
+async def _load_highest_tier(username: str) -> str:
+    row = await db.fetchone("SELECT tiers_cleared FROM users WHERE username=?", (username,))
     if not row or not row["tiers_cleared"]:
         return ""
     tiers = [t for t in row["tiers_cleared"].split(",") if t in DIFFICULTIES]
     return max(tiers, key=DIFFICULTIES.index) if tiers else ""
 
 
-def record_guess_stats(
+async def record_guess_stats(
     username: str | None,
     wpm: float,
     word_str: str,
@@ -798,17 +642,16 @@ def record_guess_stats(
 ) -> None:
     if not username:
         return
-    with _db_lock:
-        db.execute(
+    async with db.transaction() as conn:
+        await conn.execute(
             "INSERT INTO guess_log(username, word, correct, wpm, tier, ts) VALUES(?,?,?,?,?,?)",
             (username, word_str, int(correct), wpm, tier, time.time()),
         )
         if correct and streak > 0:
-            db.execute(
+            await conn.execute(
                 "UPDATE users SET best_streak = MAX(best_streak, ?) WHERE username = ?",
                 (streak, username),
             )
-        db.commit()
 
 
 # ── ELO ─
@@ -874,7 +717,15 @@ class BodyLimitMiddleware(BaseHTTPMiddleware):
 
 # ── App ─
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    await db.init(DB_PATH)
+    yield
+    await db.close()
+
+
+app = FastAPI(lifespan=_lifespan)
 app.add_middleware(BodyLimitMiddleware)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 app.mount("/audios", StaticFiles(directory=str(ROOT / "audios")), name="audios")
@@ -904,6 +755,8 @@ def _relative_time(ts: float) -> str:
 
 templates.env.filters["relative_time"] = _relative_time
 
+templates.env.globals["tier_colors"] = TIER_COLORS
+
 
 def client_ip(request: Request) -> str:
     if request.client:
@@ -914,7 +767,6 @@ def client_ip(request: Request) -> str:
 def _catalog_ctx() -> dict[str, Any]:
     return {
         "difficulties": DIFFICULTIES,
-        "tier_colors": TIER_COLORS,
         "words": WORDS,
         "total_words": TOTAL_WORDS,
     }
@@ -938,7 +790,7 @@ async def index(request: Request) -> HTMLResponse:
     user = get_current_user(request)
     elo = None
     if user:
-        row = db.execute("SELECT elo FROM users WHERE username = ?", (user,)).fetchone()
+        row = await db.fetchone("SELECT elo FROM users WHERE username = ?", (user,))
         if row:
             elo = row["elo"]
     # Reconnection: detect if session is still in an active room
@@ -998,13 +850,14 @@ async def register(request: Request) -> HTMLResponse:
     if len(password) < 8 or len(password) > 128:
         return _err("Password must be 8-128 characters.")
 
-    with _db_lock:
-        existing = db.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
-        if existing:
+    async with db.transaction() as conn:
+        cursor = await conn.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+        if await cursor.fetchone():
             return _err("Could not create account. Try a different username.")
         pw_hash = hash_password(password)
-        db.execute("INSERT INTO users (username, pw_hash) VALUES (?, ?)", (username, pw_hash))
-        db.commit()
+        await conn.execute(
+            "INSERT INTO users (username, pw_hash) VALUES (?, ?)", (username, pw_hash),
+        )
 
     resp = tpl(request, "fragments/menu.html", {"user": username, "elo": 1000.0})
     set_auth_cookie(resp, username)
@@ -1024,8 +877,7 @@ async def login(request: Request) -> HTMLResponse:
     username = str(form.get("username", "")).strip()
     password = str(form.get("password", ""))
 
-    with _db_lock:
-        row = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
 
     if not row or not verify_password(password, row["pw_hash"]):
         return tpl(
@@ -1079,8 +931,8 @@ async def guess(request: Request) -> HTMLResponse:
         return Response(status_code=204)
 
     form = await request.form()
-    guess_text = re.sub(r'[^A-Za-z]', '', str(form.get("guess", "")))[:MAX_WORD_LEN]
-    room.submit_guess(sess, guess_text)
+    guess_text = re.sub(r"[^A-Za-z]", "", str(form.get("guess", "")))[:MAX_WORD_LEN]
+    await room.submit_guess(sess, guess_text)
 
     if room.visibility in ("solo", "local") and is_local:
         active_sid_val = active_session_id(room)
@@ -1153,7 +1005,7 @@ async def room_create(request: Request) -> HTMLResponse:
 
     # Solo or private lobby
     player_name = clean_name(str(form.get("player_name", "")))
-    if is_name_reserved(player_name, user):
+    if await is_name_reserved(player_name, user):
         return HTMLResponse(
             "<p class='feedback error'>That name belongs to a registered account.</p>",
         )
@@ -1168,7 +1020,7 @@ async def room_create(request: Request) -> HTMLResponse:
         ip=ip,
     )
     if user:
-        sess.highest_tier = _load_highest_tier(user)
+        sess.highest_tier = await _load_highest_tier(user)
     sessions[sid] = sess
 
     room = Room(code=code, difficulty=difficulty, visibility=visibility, sessions=[sid])
@@ -1189,7 +1041,7 @@ async def room_join(request: Request) -> HTMLResponse:
         return err
 
     form = await request.form()
-    code = re.sub(r'[^A-Z0-9]', '', str(form.get("room_code", "")).upper())[:6]
+    code = re.sub(r"[^A-Z0-9]", "", str(form.get("room_code", "")).upper())[:6]
     player_name = clean_name(str(form.get("player_name", "")))
 
     room = rooms.get(code)
@@ -1201,7 +1053,7 @@ async def room_join(request: Request) -> HTMLResponse:
         return HTMLResponse("<p class='feedback error'>Room is full.</p>")
 
     user = get_current_user(request)
-    if is_name_reserved(player_name, user):
+    if await is_name_reserved(player_name, user):
         return HTMLResponse(
             "<p class='feedback error'>That name belongs to a registered account.</p>",
         )
@@ -1216,7 +1068,7 @@ async def room_join(request: Request) -> HTMLResponse:
         ip=ip,
     )
     if user:
-        sess.highest_tier = _load_highest_tier(user)
+        sess.highest_tier = await _load_highest_tier(user)
     sessions[sid] = sess
     room.sessions.append(sid)
     room.last_activity = time.time()
@@ -1269,7 +1121,7 @@ async def public_join(request: Request) -> HTMLResponse:
             and r.difficulty == difficulty
             and len(r.sessions) < MAX_PLAYERS
         ):
-            r.tick()
+            await r.tick()
             if not r.winner:
                 target_room = r
                 break
@@ -1289,7 +1141,7 @@ async def public_join(request: Request) -> HTMLResponse:
         ip=ip,
     )
     if user:
-        sess.highest_tier = _load_highest_tier(user)
+        sess.highest_tier = await _load_highest_tier(user)
     sessions[sid] = sess
     target_room.sessions.append(sid)
     target_room.last_activity = time.time()
@@ -1315,21 +1167,26 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         if not s:
             continue
         status = "Waiting"
+        status_class = "waiting"
         if room.winner:
             # Find their rank in results
             for mr in room.last_match_results:
                 if mr["sid"] == sid:
                     status = f"Rank {mr['rank']}"
+                    status_class = "winner" if mr["rank"] == 1 else "eliminated"
                     break
         elif sid in room.eliminated:
             status = "Eliminated"
+            status_class = "eliminated"
         elif sid == active_sid:
             status = "Spelling"
+            status_class = "spelling"
         players.append(
             {
                 "sid": sid,
                 "name": s.player_name,
                 "status": status,
+                "status_class": status_class,
                 "is_viewer": sid == viewer.id,
                 "eliminated": sid in room.eliminated,
                 "account": s.account_username,
@@ -1347,8 +1204,6 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         if room.visibility in ("solo", "local")
         else ("public" if room.visibility == "public" else "lobby"),
         "chat": list(room.chat),
-        "tier_color": TIER_COLORS.get(room.difficulty, "#ffbf00"),
-        "tier_colors": TIER_COLORS,
         "waiting_for_players": len(room.sessions) < 2 and not room.current_word,
         "is_host": viewer.id == room_host_sid(room),
         "room_locked": room.locked,
@@ -1364,10 +1219,10 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
                     parts.append(
                         f"ELO: {mr['elo']} ({'+' if mr['elo_delta'] >= 0 else ''}{mr['elo_delta']}).",
                     )
-                remaining = max(0, round(room.intermission_until - time.time()))
-                parts.insert(0, f"Next game in {remaining}s.")
                 ctx["feedback"]["body"] = " ".join(parts)
                 break
+        if room.intermission_until > time.time():
+            ctx["intermission_until"] = room.intermission_until
     elif room.current_word and not ctx["waiting_for_players"]:
         word_data = room.current_word
         ctx["word_length"] = len(word_data["word"])
@@ -1377,6 +1232,7 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
         ctx["audio_url"] = (
             f"audios/{word_data['word'].lower()}.mp3" if has_audio(word_data["word"]) else None
         )
+        ctx["word_served_at"] = room.word_served_at
 
         if is_active:
             ctx["feedback"] = viewer.last_feedback or feedback("Your turn", "", "info")
@@ -1462,7 +1318,7 @@ async def room_draft(request: Request, code: str) -> Response:
         return Response(status_code=403)
 
     form = await request.form()
-    draft = re.sub(r'[^A-Za-z]', '', str(form.get("draft", "")))[:MAX_WORD_LEN]
+    draft = re.sub(r"[^A-Za-z]", "", str(form.get("draft", "")))[:MAX_WORD_LEN]
     room.set_draft(draft)
     return Response(status_code=204)
 
@@ -1507,7 +1363,7 @@ async def room_lock_toggle(request: Request, code: str) -> Response:
         return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
     if sess.id != room_host_sid(room):
         return HTMLResponse(
-            "<p class='feedback error'>Only the host can lock.</p>", status_code=403
+            "<p class='feedback error'>Only the host can lock.</p>", status_code=403,
         )
     room.toggle_lock()
     return Response(status_code=204)
@@ -1522,7 +1378,7 @@ async def forfeit(request: Request) -> HTMLResponse:
     if sess.room_code:
         room = rooms.get(sess.room_code)
         if room and sess.id in room.sessions:
-            room.forfeit(sess.id)
+            await room.forfeit(sess.id)
 
     sess.room_code = None
     return HTMLResponse("")
@@ -1557,25 +1413,25 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
 
 @app.get("/leaderboard", response_class=HTMLResponse)
 async def leaderboard(request: Request) -> HTMLResponse:
-    rows = db.execute(
+    rows = await db.fetchall(
         "SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak, tiers_cleared"
-        " FROM users ORDER BY elo DESC LIMIT 100"
-    ).fetchall()
+        " FROM users ORDER BY elo DESC LIMIT 100",
+    )
     return tpl(request, "fragments/leaderboard.html", {"players": rows})
 
 
-def _account_ctx(row: sqlite3.Row) -> dict[str, Any]:
+async def _account_ctx(row: db.Row) -> dict[str, Any]:
     username = row["username"]
-    recent = db.execute(
+    recent = await db.fetchall(
         "SELECT word, correct, wpm, tier, ts FROM guess_log "
         "WHERE username=? ORDER BY ts DESC LIMIT 20",
         (username,),
-    ).fetchall()
-    practice = db.execute(
+    )
+    practice = await db.fetchall(
         "SELECT word, COUNT(*) as n FROM guess_log "
         "WHERE username=? AND correct=0 GROUP BY word ORDER BY n DESC LIMIT 10",
         (username,),
-    ).fetchall()
+    )
     practice_enriched = [
         {
             "word": r["word"],
@@ -1584,26 +1440,25 @@ def _account_ctx(row: sqlite3.Row) -> dict[str, Any]:
         }
         for r in practice
     ]
-    avg_row = db.execute(
+    avg_row = await db.fetchone(
         "SELECT AVG(wpm) as avg_wpm FROM (SELECT wpm FROM guess_log "
         "WHERE username=? AND correct=1 ORDER BY ts DESC LIMIT 50)",
         (username,),
-    ).fetchone()
+    )
     avg_wpm = round(avg_row["avg_wpm"], 1) if avg_row and avg_row["avg_wpm"] else 0
     return {
         "recent": recent,
         "practice": practice_enriched,
         "avg_wpm": avg_wpm,
-        "tier_colors": TIER_COLORS,
     }
 
 
 @app.get("/account/{username}", response_class=HTMLResponse)
 async def account_view(request: Request, username: str) -> HTMLResponse:
-    row = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
     if not row:
         return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
-    return tpl(request, "fragments/account.html", {"player": row, **_account_ctx(row)})
+    return tpl(request, "fragments/account.html", {"player": row, **(await _account_ctx(row))})
 
 
 @app.get("/account", response_class=HTMLResponse)
@@ -1611,10 +1466,10 @@ async def own_account(request: Request) -> HTMLResponse:
     user = get_current_user(request)
     if not user:
         return HTMLResponse("<p class='feedback error'>Not logged in.</p>", status_code=403)
-    row = db.execute("SELECT * FROM users WHERE username = ?", (user,)).fetchone()
+    row = await db.fetchone("SELECT * FROM users WHERE username = ?", (user,))
     if not row:
         return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
-    return tpl(request, "fragments/account.html", {"player": row, **_account_ctx(row)})
+    return tpl(request, "fragments/account.html", {"player": row, **(await _account_ctx(row))})
 
 
 if __name__ == "__main__":

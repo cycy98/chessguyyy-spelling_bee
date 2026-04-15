@@ -24,7 +24,7 @@
         {% endfor %}
         {% if player.tiers_cleared %}
         {% for t in player.tiers_cleared.split(',') if t %}
-        <span class="badge glass" style="border-color: {{ tier_colors.get(t, '#ffbf00') }}40; color: {{ tier_colors.get(t, '#ffbf00') }}">
+        <span class="badge glass" data-tier="{{ t }}">
             {{ t | capitalize }}
         </span>
         {% endfor %}
@@ -81,7 +81,7 @@
                     <td style="font-weight:600">{{ r.word }}</td>
                     <td>{% if r.correct %}<span style="color:var(--green)">Correct</span>{% else %}<span style="color:var(--red)">Missed</span>{% endif %}</td>
                     <td>{{ r.wpm | round(1) }}</td>
-                    <td><span class="tier-pip" style="background:{{ tier_colors.get(r.tier, '#ffbf00') }}"></span> {{ r.tier | capitalize }}</td>
+                    <td><span class="tier-pip" data-tier="{{ r.tier }}"></span> {{ r.tier | capitalize }}</td>
                     <td style="color:var(--text-muted)">{{ r.ts | relative_time }}</td>
                 </tr>
                 {% endfor %}

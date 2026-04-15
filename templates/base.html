@@ -7,6 +7,11 @@
     <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.amber.min.css">
     <link rel="stylesheet" href="static/styles.css">
+    <style>
+    {% for tier, color in tier_colors.items() %}
+    [data-tier="{{ tier }}"] { --tier-color: {{ color }}; }
+    {% endfor %}
+    </style>
     <script src="https://unpkg.com/htmx.org@2.0.8"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"></script>
     <script src="https://unpkg.com/idiomorph@0.7.4/dist/idiomorph-ext.min.js"></script>
@@ -49,8 +54,11 @@
         if (!e.detail.requestConfig?.path?.includes('guess')) return;
         const board = document.querySelector('.board-wrapper');
         if (!board) return;
-        const isSuccess = document.querySelector('.feedback-card')?.classList.contains('success');
-        board.classList.add(isSuccess ? 'board-correct' : 'board-incorrect');
+        const cls = document.querySelector('.feedback-card')?.classList.contains('success')
+            ? 'board-correct' : 'board-incorrect';
+        board.classList.remove('board-correct', 'board-incorrect');
+        board.classList.add(cls);
+        board.addEventListener('animationend', () => board.classList.remove(cls), { once: true });
     });
 
     function spellingBee() {
@@ -64,6 +72,7 @@
             localPlayers: ['', ''],
             audioObj: null,
             audioPlayedUrl: '',
+            lastWordKey: '',
             inputLocked: false,
             nameTracksLogin: true,
             loggedInUser: '',

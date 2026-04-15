@@ -3,7 +3,9 @@
     {% if mode not in ('solo', 'local') %}hx-ext="sse" sse-connect="room/{{ room.code }}/stream" hx-get="room/{{ room.code }}" hx-trigger="sse:refresh" hx-target="#game-area" hx-swap="morph:innerHTML"{% endif %}
     x-init="$nextTick(() => {
         {% if audio_url and not room.winner and not waiting_for_players %}
-        if (audioPlayedUrl !== '{{ audio_url }}') {
+        const _wk = '{{ audio_url }}|{{ word_served_at }}';
+        if (lastWordKey !== _wk) {
+            lastWordKey = _wk;
             setTimeout(() => playAudio('{{ audio_url }}', {{ 'true' if is_active else 'false' }}), 110);
         }
         {% else %}
@@ -15,7 +17,7 @@
     <!-- Status Row -->
     <div class="status-row">
         <span class="player-name">{{ viewer.player_name }}</span>
-        <span class="diff-badge" style="background: {{ tier_color }}">
+        <span class="diff-badge" data-tier="{{ room.difficulty }}">
             {{ room.difficulty | capitalize }}
         </span>
         <span class="room-code-badge">{{ room.code }}</span>
@@ -43,6 +45,26 @@
                     <span class="clue-pos">Game Over</span>
                 </div>
                 <p class="clue-def">{{ room.winner }} wins!</p>
+                {% if intermission_until is defined and intermission_until %}
+                <div class="timer"
+                     data-deadline="{{ intermission_until }}"
+                     x-data="{ remaining: 0, get pct() { return Math.max(0, this.remaining / 15 * 100) } }"
+                     x-init="
+                         remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                         const iv = setInterval(() => {
+                             remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                             if (remaining === 0) clearInterval(iv);
+                         }, 250);
+                         $cleanup(() => clearInterval(iv));
+                     ">
+                    <div class="timer-info">
+                        <span class="timer-label">Next game in</span>
+                        <span class="timer-time" x-text="Math.ceil(remaining) + 's'"></span>
+                    </div>
+                    <progress :value="remaining" :max="15"
+                        :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
+                </div>
+                {% endif %}
             </div>
             {% if feedback %}
             <div class="feedback-card glass {{ feedback.type }}">
@@ -77,7 +99,7 @@
                 <div class="streak-badge">{{ streak }} streak</div>
                 {% endif %}
                 {% if is_active %}
-                <textarea id="guess-input" hx-preserve="true" name="draft" class="board-input"
+                <textarea id="guess-input" name="draft" class="board-input"
                     x-model="guessText"
                     :disabled="inputLocked"
                     autofocus
@@ -159,9 +181,9 @@
                     <span class="player-rank" style="background:{{ p.name | name_color }}">{{ 'X' if p.eliminated else loop.index }}</span>
                     <span class="player-row-name">{{ p.name }}</span>
                     {% if p.highest_tier %}
-                    <span class="tier-pip" style="background:{{ tier_colors.get(p.highest_tier, '#ffbf00') }}" title="{{ p.highest_tier | capitalize }}"></span>
+                    <span class="tier-pip" data-tier="{{ p.highest_tier }}" title="{{ p.highest_tier | capitalize }}"></span>
                     {% endif %}
-                    <span class="player-status {{ p.status | lower | replace(' ', '-') }}">{{ p.status }}</span>
+                    <span class="player-status {{ p.status_class }}">{{ p.status }}</span>
                 </div>
                 {% endfor %}
             </div>

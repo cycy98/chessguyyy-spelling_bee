@@ -534,6 +534,17 @@ h1, h2, h3 {
     margin-bottom: 16px;
 }
 
+/* ── Tier colors (--tier-color set via data-tier in base.html <style>) ── */
+
+.diff-swatch[data-tier],
+.diff-badge[data-tier],
+.tier-pip[data-tier] { background: var(--tier-color, #ffbf00); }
+
+.badge.glass[data-tier] {
+    border-color: color-mix(in srgb, var(--tier-color, #ffbf00) 25%, transparent);
+    color: var(--tier-color, #ffbf00);
+}
+
 /* ── Identity ─────────────────────────────────────────────────────────── */
 
 .name-dot {
