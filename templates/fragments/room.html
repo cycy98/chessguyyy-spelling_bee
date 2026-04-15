@@ -34,13 +34,13 @@
         <!-- Main Area -->
         <div class="game-main">
             {% if waiting_for_players %}
-            <div class="waiting-card glass">
+            <article class="waiting-card">
                 <h3>Waiting for players...</h3>
                 <p>Share room code: <strong>{{ room.code }}</strong></p>
-            </div>
+            </article>
             {% elif room.winner %}
             <!-- Intermission / Game Over -->
-            <div class="clue-card glass">
+            <article class="clue-card">
                 <div class="clue-header">
                     <span class="clue-pos">Game Over</span>
                 </div>
@@ -65,12 +65,12 @@
                         :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
                 </div>
                 {% endif %}
-            </div>
+            </article>
             {% if feedback %}
-            <div class="feedback-card glass {{ feedback.type }}">
+            <article class="feedback-card {{ feedback.type }}">
                 <strong>{{ feedback.title }}</strong>
                 {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
-            </div>
+            </article>
             {% endif %}
             {% if mode in ('solo', 'local') %}
             <div class="controls" role="group">
@@ -80,13 +80,13 @@
             {% else %}
             <!-- Active Game -->
             {% if definition is defined and definition %}
-            <div class="clue-card glass">
+            <article class="clue-card">
                 <div class="clue-header">
                     <span class="clue-pos">{{ part_of_speech }}</span>
                     <span class="clue-letters">{{ word_length }} letters</span>
                 </div>
                 <p class="clue-def">{{ definition }}</p>
-            </div>
+            </article>
             {% endif %}
 
             {% if audio_url is defined and audio_url %}
@@ -158,16 +158,16 @@
 
             <!-- Feedback -->
             {% if feedback %}
-            <div class="feedback-card glass {{ feedback.type }}">
+            <article class="feedback-card {{ feedback.type }}">
                 <strong>{{ feedback.title }}</strong>
                 {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
-            </div>
+            </article>
             {% endif %}
             {% endif %}
         </div>
 
         <!-- Sidebar -->
-        <div class="game-sidebar glass"{% if mode == 'solo' %} style="display:none"{% endif %}>
+        <article class="game-sidebar"{% if mode == 'solo' %} style="display:none"{% endif %}>
             {% if mode not in ('local', 'solo') %}
             <div class="sidebar-tabs">
                 <button class="tab-btn" :class="{ active: sideTab === 'players' }" @click="sideTab = 'players'">Players</button>
@@ -182,7 +182,7 @@
                     <span class="player-rank" style="background:{{ p.name | name_color }}">{{ 'X' if p.eliminated else loop.index }}</span>
                     <span class="player-row-name">{{ p.name }}</span>
                     {% if p.highest_tier %}
-                    <span class="tier-pip" data-tier="{{ p.highest_tier }}" title="{{ p.highest_tier | capitalize }}"></span>
+                    <span class="pip" data-tier="{{ p.highest_tier }}" title="{{ p.highest_tier | capitalize }}"></span>
                     {% endif %}
                     <span class="player-status {{ p.status_class }}">{{ p.status }}</span>
                 </div>
@@ -207,6 +207,6 @@
                 </div>
             </div>
             {% endif %}
-        </div>
+        </article>
     </div>
 </div>

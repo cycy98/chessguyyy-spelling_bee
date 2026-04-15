@@ -1,6 +1,6 @@
 {# Account fragment #}
 <div class="account" data-elo="{{ player.elo | round(1) }}">
-    <div class="account-header">
+    <div class="account-header bar">
         <h2>{{ player.username }} | {{ player.elo | round(1) }} ELO</h2>
         <div style="display:flex;gap:6px">
             <button class="outline secondary" hx-get="leaderboard" hx-target="#leaderboard-area" hx-swap="innerHTML"
@@ -20,11 +20,11 @@
     {% if badges or player.tiers_cleared %}
     <div class="badge-row">
         {% for name, icon in badges %}
-        <span class="badge glass">{{ icon }} {{ name }}</span>
+        <span class="badge">{{ icon }} {{ name }}</span>
         {% endfor %}
         {% if player.tiers_cleared %}
         {% for t in player.tiers_cleared.split(',') if t %}
-        <span class="badge glass" data-tier="{{ t }}">
+        <span class="badge" data-tier="{{ t }}">
             {{ t | capitalize }}
         </span>
         {% endfor %}
@@ -33,43 +33,45 @@
     {% endif %}
 
     <div class="stat-cards">
-        <div class="stat-card glass">
+        <article class="stat-card">
             <div class="stat-value">{{ player.games }}</div>
             <div class="stat-label">Games Played</div>
-        </div>
-        <div class="stat-card glass">
+        </article>
+        <article class="stat-card">
             <div class="stat-value">{{ player.words }}</div>
             <div class="stat-label">Words Attempted</div>
-        </div>
-        <div class="stat-card glass">
+        </article>
+        <article class="stat-card">
             <div class="stat-value">{{ ((player.wins / player.games * 100) if player.games > 0 else 0) | round(1) }}%</div>
             <div class="stat-label">Win Rate</div>
-        </div>
-        <div class="stat-card glass">
+        </article>
+        <article class="stat-card">
             <div class="stat-value">{{ ((player.correct / player.words * 100) if player.words > 0 else 0) | round(1) }}%</div>
             <div class="stat-label">Correct Rate</div>
-        </div>
-        <div class="stat-card glass">
+        </article>
+        <article class="stat-card">
             <div class="stat-value">{{ player.best_streak }}</div>
             <div class="stat-label">Best Streak</div>
-        </div>
-        <div class="stat-card glass">
+        </article>
+        <article class="stat-card">
             <div class="stat-value">{{ avg_wpm }}</div>
             <div class="stat-label">Avg WPM (recent)</div>
-        </div>
+        </article>
     </div>
 
-    <table class="glass">
-        <tbody>
-            <tr><td>Wins</td><td style="text-align:right;font-weight:600">{{ player.wins }}</td></tr>
-            <tr><td>Correct Words</td><td style="text-align:right;font-weight:600">{{ player.correct }}</td></tr>
-            <tr><td>Highest WPM</td><td style="text-align:right;font-weight:600">{{ player.best_wpm }}</td></tr>
-            <tr><td>Best WPM Word</td><td style="text-align:right;font-weight:600">{{ player.best_word or '—' }}</td></tr>
-        </tbody>
-    </table>
+    <article>
+        <table>
+            <tbody>
+                <tr><td>Wins</td><td>{{ player.wins }}</td></tr>
+                <tr><td>Correct Words</td><td>{{ player.correct }}</td></tr>
+                <tr><td>Highest WPM</td><td>{{ player.best_wpm }}</td></tr>
+                <tr><td>Best WPM Word</td><td>{{ player.best_word or '—' }}</td></tr>
+            </tbody>
+        </table>
+    </article>
 
     {% if recent %}
-    <h3 style="margin-top:24px; color:var(--amber)">Recent Activity</h3>
+    <h3 style="margin-top:24px">Recent Activity</h3>
     <div style="overflow-x:auto">
         <table>
             <thead>
@@ -78,11 +80,11 @@
             <tbody>
                 {% for r in recent %}
                 <tr>
-                    <td style="font-weight:600">{{ r.word }}</td>
-                    <td>{% if r.correct %}<span style="color:var(--green)">Correct</span>{% else %}<span style="color:var(--red)">Missed</span>{% endif %}</td>
+                    <td>{{ r.word }}</td>
+                    <td>{% if r.correct %}<span class="correct">Correct</span>{% else %}<span class="missed">Missed</span>{% endif %}</td>
                     <td>{{ r.wpm | round(1) }}</td>
-                    <td><span class="tier-pip" data-tier="{{ r.tier }}"></span> {{ r.tier | capitalize }}</td>
-                    <td style="color:var(--text-muted)">{{ r.ts | relative_time }}</td>
+                    <td><span class="pip" data-tier="{{ r.tier }}"></span> {{ r.tier | capitalize }}</td>
+                    <td class="muted">{{ r.ts | relative_time }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -91,7 +93,7 @@
     {% endif %}
 
     {% if practice %}
-    <h3 style="margin-top:24px; color:var(--amber)">Words to Practice</h3>
+    <h3 style="margin-top:24px">Words to Practice</h3>
     <div style="overflow-x:auto">
         <table>
             <thead>
@@ -100,9 +102,9 @@
             <tbody>
                 {% for p in practice %}
                 <tr>
-                    <td style="font-weight:600">{{ p.word }}</td>
+                    <td>{{ p.word }}</td>
                     <td>{{ p.n }}</td>
-                    <td style="font-size:0.85rem;color:var(--text-muted)">{{ p.definition or '—' }}</td>
+                    <td class="detail">{{ p.definition or '—' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

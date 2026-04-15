@@ -1,7 +1,7 @@
 [project]
 name = "spellingbee"
-version = "0.0.1"
-description = "Unfinished alpha."
+version = "0.1.0"
+description = "Spelling bee"
 requires-python = ">=3.13"
 dependencies = [
     "aiosqlite>=0.22.1",
