@@ -1,6 +1,6 @@
 [project]
 name = "spellingbee"
-version = "0.1.0"
+version = "0.2.0"
 description = "Spelling bee"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,6 +10,9 @@ dependencies = [
     "python-multipart>=0.0.26",
     "sse-starlette>=3.3.4",
 ]
+
+[project.optional-dependencies]
+audio = ["mutagen>=1.47"]
 
 [tool.ruff]
 line-length = 100

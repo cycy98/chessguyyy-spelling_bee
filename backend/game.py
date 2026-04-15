@@ -60,7 +60,7 @@ MAX_CHAT = 80
 MAX_CHAT_LEN = 150
 MAX_WORD_LEN = 50
 STALE_MINUTES = 30
-TURN_DEADLINE_GRACE = 1.0  # extra seconds added to deadline to absorb SSE + render latency
+NETWORK_GRACE = 1.5  # seconds added to deadline for network + render latency (audio accounted separately)
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
@@ -102,8 +102,31 @@ def pick_word(difficulty: str) -> WordEntry:
     return cast(WordEntry, {"word": word_str, **pool[word_str], "tier": difficulty})
 
 
+def _load_audio_durations() -> dict[str, float]:
+    """Pre-scan audios/ for MP3 durations. Uses mutagen if available, else estimates from file size."""
+    audios_dir = ROOT / "audios"
+    if not audios_dir.is_dir():
+        return {}
+    durations: dict[str, float] = {}
+    try:
+        from mutagen.mp3 import MP3
+
+        for p in audios_dir.glob("*.mp3"):
+            try:
+                durations[p.stem.lower()] = MP3(p).info.length
+            except Exception:  # noqa: BLE001
+                durations[p.stem.lower()] = len(p.stem) * 0.12 + 0.5
+    except ImportError:
+        for p in audios_dir.glob("*.mp3"):
+            durations[p.stem.lower()] = len(p.stem) * 0.12 + 0.5
+    return durations
+
+
+AUDIO_DURATIONS: dict[str, float] = _load_audio_durations()
+
+
 def has_audio(word: str) -> bool:
-    return (ROOT / "audios" / f"{word.lower()}.mp3").exists()
+    return word.lower() in AUDIO_DURATIONS
 
 
 # ── In-memory state ──
@@ -171,7 +194,8 @@ class Room:
         is_solo = self.visibility == "solo"
         tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
         self.turn_time_limit = tl
-        self.turn_deadline = time.time() + tl + TURN_DEADLINE_GRACE
+        audio_dur = AUDIO_DURATIONS.get(word_str.lower(), 0.0)
+        self.turn_deadline = time.time() + tl + audio_dur + NETWORK_GRACE
 
     def check_timeout(self) -> list[Ranking] | None:
         """Check and handle timeout. Returns rankings if game ended."""

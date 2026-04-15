@@ -122,7 +122,7 @@
                 if (this.localPlayers.length > 2) this.localPlayers.pop();
             },
 
-            playAudio(url, lock) {
+            playAudio(url, lock, duration) {
                 if (!url) {
                     this.inputLocked = false;
                     return;
@@ -142,7 +142,8 @@
                     };
                     this.audioObj.addEventListener('ended', unlock);
                     this.audioObj.addEventListener('error', unlock);
-                    setTimeout(unlock, 1000);
+                    const fallback = duration ? (duration * 1000) + 500 : 5000;
+                    setTimeout(unlock, fallback);
                 }
                 this.audioObj.play().catch(() => { this.inputLocked = false; });
             },
@@ -150,12 +151,13 @@
             replayAudio() {
                 const url = document.querySelector('[data-audio-url]');
                 if (url && url.dataset.audioUrl) {
-                    this.playAudio(url.dataset.audioUrl, false);
+                    this.playAudio(url.dataset.audioUrl, false, 0);
                 }
             },
 
             submitGuess(text) {
                 if (this.inputLocked) return;
+                this.inputLocked = true;
                 this.guessText = '';
                 htmx.ajax('POST', 'guess', {
                     target: '#game-area',

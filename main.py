@@ -21,6 +21,7 @@ from backend import db
 from backend.auth import get_current_user
 from backend.errors import HtmxError
 from backend.game import (
+    AUDIO_DURATIONS,
     DIFFICULTIES,
     MAX_CHAT_LEN,
     MAX_LOCAL_PLAYERS,
@@ -598,9 +599,9 @@ def build_room_ctx(state: ServerState, room: Room, viewer: Session) -> dict[str,
         ctx["definition"] = word_data["definition"]
         ctx["part_of_speech"] = word_data["part_of_speech"]
 
-        ctx["audio_url"] = (
-            f"audios/{word_data['word'].lower()}.mp3" if has_audio(word_data["word"]) else None
-        )
+        word_lower = word_data["word"].lower()
+        ctx["audio_url"] = f"audios/{word_lower}.mp3" if has_audio(word_data["word"]) else None
+        ctx["audio_duration"] = AUDIO_DURATIONS.get(word_lower, 0.0)
         ctx["word_served_at"] = room.word_served_at
 
         if is_active:

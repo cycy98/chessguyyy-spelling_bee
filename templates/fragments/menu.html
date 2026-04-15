@@ -1,6 +1,6 @@
 {# Auth + setup fragment — returned after login/logout/register #}
 {% if user %}
-<div id="auth-section" class="auth-logged-in glass">
+<div id="auth-section" class="bar glass" style="padding:16px;margin-bottom:20px">
     <span class="auth-info">{{ user }} | {{ elo | round(1) }} ELO</span>
     <button class="secondary small" hx-post="logout" hx-target="#auth-section" hx-swap="outerHTML">Logout</button>
 </div>

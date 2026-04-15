@@ -107,16 +107,7 @@ article {
 
 /* ── Auth ─────────────────────────────────────────────────────────────── */
 
-.auth-logged-in {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px;
-    margin-bottom: 20px;
-
-    & .auth-info { font-weight: 600; color: var(--amber); }
-}
+.auth-info { font-weight: 600; color: var(--amber); }
 
 .feedback.error, .error { color: var(--red); }
 .feedback.success { color: var(--green); }
@@ -172,10 +163,7 @@ article {
 /* ── Local Section ────────────────────────────────────────────────────── */
 
 .local-header {
-    display: flex;
-    align-items: center;
     justify-content: center;
-    gap: 12px;
     margin-bottom: 12px;
     color: var(--text-muted);
 }
@@ -378,13 +366,7 @@ article {
     & .tab-btn {
         flex: 1;
         padding: 6px;
-        background: transparent;
-        border: 1px solid var(--glass-border);
-        border-radius: var(--radius-sm);
-        color: var(--text-muted);
-        cursor: pointer;
         font-size: 0.85rem;
-        transition: all 150ms;
 
         &.active {
             background: var(--glass);

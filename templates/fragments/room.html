@@ -6,7 +6,7 @@
         const _wk = '{{ audio_url }}|{{ word_served_at }}';
         if (lastWordKey !== _wk) {
             lastWordKey = _wk;
-            setTimeout(() => playAudio('{{ audio_url }}', {{ 'true' if is_active else 'false' }}), 110);
+            playAudio('{{ audio_url }}', {{ 'true' if is_active else 'false' }}, {{ audio_duration }});
         }
         {% else %}
         inputLocked = false;
@@ -126,22 +126,40 @@
                 <div class="timer"
                      data-deadline="{{ turn_deadline }}"
                      data-total="{{ time_limit | round(1) }}"
-                     x-data="{ remaining: 0, total: 0, initialRemaining: 0, get pct() { return this.initialRemaining > 0 ? Math.max(0, this.remaining / this.initialRemaining * 100) : 0 } }"
+                     data-active="{{ 'true' if is_active else 'false' }}"
+                     x-data="{ remaining: 0, total: 0, started: false, get pct() { return this.total > 0 ? Math.max(0, this.remaining / this.total * 100) : 0 } }"
                      x-init="
                          total = +$el.dataset.total;
-                         remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
-                         initialRemaining = remaining;
-                         const iv = setInterval(() => {
+                         const isActive = $el.dataset.active === 'true';
+                         let iv;
+                         if (isActive) {
+                             remaining = total;
+                             const check = setInterval(() => {
+                                 if (!inputLocked && !started) {
+                                     started = true;
+                                     const deadline = Date.now()/1000 + total;
+                                     iv = setInterval(() => {
+                                         remaining = Math.max(0, deadline - Date.now()/1000);
+                                         if (remaining === 0) clearInterval(iv);
+                                     }, 250);
+                                     clearInterval(check);
+                                 }
+                             }, 50);
+                             $cleanup(() => { clearInterval(check); if (iv) clearInterval(iv); });
+                         } else {
                              remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
-                             if (remaining === 0) clearInterval(iv);
-                         }, 250);
-                         $cleanup(() => clearInterval(iv));
+                             iv = setInterval(() => {
+                                 remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                                 if (remaining === 0) clearInterval(iv);
+                             }, 250);
+                             $cleanup(() => clearInterval(iv));
+                         }
                      ">
                     <div class="timer-info">
                         <span class="timer-label">Time left</span>
                         <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
                     </div>
-                    <progress :value="remaining" :max="initialRemaining"
+                    <progress :value="remaining" :max="total"
                         :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
                 </div>
                 {% endif %}
@@ -170,8 +188,8 @@
         <article class="game-sidebar"{% if mode == 'solo' %} style="display:none"{% endif %}>
             {% if mode not in ('local', 'solo') %}
             <div class="sidebar-tabs">
-                <button class="tab-btn" :class="{ active: sideTab === 'players' }" @click="sideTab = 'players'">Players</button>
-                <button class="tab-btn" :class="{ active: sideTab === 'chat' }" @click="sideTab = 'chat'">Chat</button>
+                <button class="outline secondary tab-btn" :class="{ active: sideTab === 'players' }" @click="sideTab = 'players'">Players</button>
+                <button class="outline secondary tab-btn" :class="{ active: sideTab === 'chat' }" @click="sideTab = 'chat'">Chat</button>
             </div>
             {% endif %}
 

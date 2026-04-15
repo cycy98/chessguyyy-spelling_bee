@@ -101,7 +101,7 @@
     <details>
         <summary role="button" class="outline secondary">Local Multiplayer</summary>
         <article style="padding:16px; margin-top:8px; margin-bottom:20px">
-            <div class="local-header">
+            <div class="local-header bar">
                 <button class="outline secondary small" @click="removeLocalPlayer()" :disabled="localPlayers.length <= 2">−</button>
                 <span x-text="localPlayers.length + ' players'"></span>
                 <button class="outline secondary small" @click="addLocalPlayer()" :disabled="localPlayers.length >= 12">+</button>
