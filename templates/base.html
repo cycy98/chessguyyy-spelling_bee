@@ -44,6 +44,15 @@
         }
     });
 
+    /* Board glow — client-side, triggered only by guess POST response */
+    document.addEventListener('htmx:afterSwap', (e) => {
+        if (!e.detail.requestConfig?.path?.includes('guess')) return;
+        const board = document.querySelector('.board-wrapper');
+        if (!board) return;
+        const isSuccess = document.querySelector('.feedback-card')?.classList.contains('success');
+        board.classList.add(isSuccess ? 'board-correct' : 'board-incorrect');
+    });
+
     function spellingBee() {
         return {
             view: 'menu',
@@ -142,7 +151,7 @@
                 htmx.ajax('POST', 'guess', {
                     target: '#game-area',
                     swap: 'innerHTML',
-                    values: { guess: text || '' }
+                    values: { guess: (text || '').replace(/[^A-Za-z]/g, '') }
                 });
             },
 

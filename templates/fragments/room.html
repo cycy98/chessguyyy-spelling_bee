@@ -72,7 +72,7 @@
             {% endif %}
 
             <!-- Board -->
-            <div class="board-wrapper{% if board_glow is defined and board_glow %} board-{{ board_glow }}{% endif %}">
+            <div class="board-wrapper">
                 {% if streak is defined and streak >= 2 %}
                 <div class="streak-badge">{{ streak }} streak</div>
                 {% endif %}
@@ -84,20 +84,36 @@
                     x-effect="if (!inputLocked) $nextTick(() => $el.focus())"
                     hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"
                     @keydown.enter.prevent="submitGuess(guessText)"
+                    @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-z]/g, '')"
                     placeholder="Type your answer..."
+                    maxlength="50"
                     autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
                 {% else %}
                 <textarea class="board-input watcher" readonly
-                    placeholder="{{ active_player_name }} is spelling...">{{ draft_text if draft_text is defined else '' }}</textarea>
+                    placeholder="{{ active_player_name }} is spelling..."
+                    hx-get="room/{{ room.code }}/draft-text"
+                    hx-trigger="every 100ms"
+                    hx-swap="innerHTML"
+                    hx-vals='{"h": this.innerText}'
+                    hx-on::before-swap="if(event.detail.xhr.status === 204) event.detail.shouldSwap = false"
+                    >{{ draft_text if draft_text is defined else '' }}</textarea>
                 {% endif %}
 
                 <!-- Timer -->
-                {% if time_limit is defined and time_limit and time_remaining is defined %}
-                <div class="timer" x-data="{
-                        remaining: {{ time_remaining | round(1) }},
-                        total: {{ time_limit | round(1) }},
-                        get pct() { return Math.max(0, this.remaining / this.total * 100) }
-                    }" x-init="const iv = setInterval(() => { if (remaining > 0) remaining = Math.max(0, remaining - 1); else clearInterval(iv); }, 1000); $cleanup(() => clearInterval(iv))">
+                {% if turn_deadline is defined and turn_deadline and time_limit is defined %}
+                <div class="timer"
+                     data-deadline="{{ turn_deadline }}"
+                     data-total="{{ time_limit | round(1) }}"
+                     x-data="{ remaining: 0, total: 0, get pct() { return this.total > 0 ? Math.max(0, this.remaining / this.total * 100) : 0 } }"
+                     x-init="
+                         total = +$el.dataset.total;
+                         remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                         const iv = setInterval(() => {
+                             remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                             if (remaining === 0) clearInterval(iv);
+                         }, 250);
+                         $cleanup(() => clearInterval(iv));
+                     ">
                     <div class="timer-info">
                         <span class="timer-label">Time left</span>
                         <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
@@ -161,7 +177,7 @@
                     {% endfor %}
                 </div>
                 <div class="chat-input-row">
-                    <input type="text" maxlength="300" placeholder="Message..."
+                    <input type="text" maxlength="150" placeholder="Message..."
                         x-model="chatMsg"
                         @keydown.enter.prevent="sendChat('{{ room.code }}')" />
                     <button class="small" @click="sendChat('{{ room.code }}')">Send</button>

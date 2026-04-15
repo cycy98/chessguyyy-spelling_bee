@@ -8,9 +8,9 @@
 {% else %}
 <form id="auth-section" class="glass" style="padding:16px; margin-bottom:20px" hx-target="this" hx-swap="outerHTML" @submit.prevent>
     <label for="auth-username">Username</label>
-    <input type="text" name="username" maxlength="24" id="auth-username" autocomplete="username" />
+    <input type="text" name="username" minlength="3" maxlength="24" id="auth-username" autocomplete="username" />
     <label for="auth-password">Password</label>
-    <input type="password" name="password" maxlength="128" id="auth-password" autocomplete="current-password" />
+    <input type="password" name="password" minlength="8" maxlength="128" id="auth-password" autocomplete="current-password" />
     <div role="group">
         <button hx-post="register" hx-include="#auth-username, #auth-password">Register</button>
         <button class="secondary" hx-post="login" hx-include="#auth-username, #auth-password">Login</button>

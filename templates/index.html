@@ -23,7 +23,7 @@
     <label for="player-name">Player Name</label>
     <input type="text" id="player-name" maxlength="24" placeholder="Player One"
         x-model="playerName"
-        @input="nameTracksLogin = false; profanityError = ''" />
+        @input="playerName = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9 '_-]/g, ''); nameTracksLogin = false; profanityError = ''" />
     <p class="feedback error" x-show="profanityError" x-text="profanityError" x-cloak></p>
 
     <!-- Difficulty Picker -->
@@ -48,7 +48,8 @@
     <!-- Room Code -->
     <label for="room-code">Room Code</label>
     <input type="text" id="room-code" maxlength="6" placeholder="Leave empty to create"
-        x-model="roomCodeInput" style="text-transform: uppercase" />
+        x-model="roomCodeInput"
+        @input="roomCodeInput = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase()" />
 
     <!-- Action Buttons -->
     <div class="action-buttons">
@@ -109,7 +110,8 @@
                 <template x-for="(p, i) in localPlayers" :key="i">
                     <input type="text" maxlength="24"
                         :placeholder="'Player ' + (i + 1)"
-                        x-model="localPlayers[i]" />
+                        x-model="localPlayers[i]"
+                        @input="localPlayers[i] = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9 '_-]/g, '')" />
                 </template>
             </div>
             <button

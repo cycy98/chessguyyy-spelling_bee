@@ -33,9 +33,10 @@ SECRET = secrets.token_bytes(32)
 COOKIE_MAX_AGE = 7 * 24 * 3600
 MAX_BODY = 8 * 1024
 MAX_CHAT = 80
-MAX_CHAT_LEN = 300
-MAX_DRAFT_LEN = 200
+MAX_CHAT_LEN = 150
+MAX_WORD_LEN = 50
 STALE_MINUTES = 30
+DISCONNECT_GRACE = 12  # seconds before a disconnected player is auto-forfeited
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
@@ -230,13 +231,11 @@ class Session:
     difficulty: str
     room_code: str | None = None
     account_username: str | None = None
-    owner_token: str | None = None
+    highest_tier: str = ""
     streak: int = 0
     words_attempted: int = 0
     words_correct: int = 0
     last_feedback: dict[str, str] = field(default_factory=dict)
-    board_glow: str | None = None  # "correct" or "incorrect"
-    board_glow_at: float = 0.0
     ip: str = ""
     last_activity: float = field(default_factory=time.time)
 
@@ -274,6 +273,7 @@ class Room:
         tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
         self.turn_time_limit = tl
         self.turn_deadline = time.time() + tl
+        _arm_room_timer(self.code)
 
     def check_timeout(self) -> bool:
         """Check and handle timeout. Returns True if someone was eliminated."""
@@ -418,7 +418,6 @@ class Room:
     def set_draft(self, text: str) -> None:
         self.draft_text = text
         self.last_activity = time.time()
-        self._notify()
 
     def add_chat(self, entry: dict[str, str]) -> None:
         self.chat.append(entry)
@@ -449,8 +448,6 @@ class Room:
             if not guess_text:
                 sess.streak = 0
                 sess.last_feedback = feedback("Skipped", f"Answer: {word_str}.")
-                sess.board_glow = "incorrect"
-                sess.board_glow_at = time.time()
                 record_guess_stats(
                     sess.account_username,
                     0,
@@ -468,8 +465,6 @@ class Room:
                     if homophone:
                         body = f'Accepted as "{homophone}". {wpm} WPM.'
                     sess.last_feedback = feedback("Correct", body, "success")
-                    sess.board_glow = "correct"
-                    sess.board_glow_at = time.time()
                     record_guess_stats(
                         sess.account_username,
                         wpm,
@@ -478,11 +473,16 @@ class Room:
                         tier=word_data["tier"],
                         streak=sess.streak,
                     )
+                    if sess.account_username:
+                        t = word_data["tier"]
+                        if t in DIFFICULTIES and (
+                            not sess.highest_tier
+                            or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
+                        ):
+                            sess.highest_tier = t
                 else:
                     sess.streak = 0
                     sess.last_feedback = feedback("Incorrect", f"Answer: {word_str}. {wpm} WPM.")
-                    sess.board_glow = "incorrect"
-                    sess.board_glow_at = time.time()
                     record_guess_stats(
                         sess.account_username,
                         wpm,
@@ -494,8 +494,6 @@ class Room:
             self.serve_new_word(streak=sess.streak)
         elif not guess_text:
             sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {word_str}.")
-            sess.board_glow = "incorrect"
-            sess.board_glow_at = time.time()
             record_guess_stats(
                 sess.account_username,
                 0,
@@ -514,8 +512,6 @@ class Room:
                 if homophone:
                     body = f'Accepted as "{homophone}". {body}'
                 sess.last_feedback = feedback("Correct", body, "success")
-                sess.board_glow = "correct"
-                sess.board_glow_at = time.time()
                 record_guess_stats(
                     sess.account_username,
                     wpm,
@@ -524,11 +520,16 @@ class Room:
                     tier=word_data["tier"],
                     streak=sess.streak,
                 )
+                if sess.account_username:
+                    t = word_data["tier"]
+                    if t in DIFFICULTIES and (
+                        not sess.highest_tier
+                        or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
+                    ):
+                        sess.highest_tier = t
                 self.advance_turn(eliminated=False)
             else:
                 sess.last_feedback = feedback("Eliminated", f"Answer: {word_str}.")
-                sess.board_glow = "incorrect"
-                sess.board_glow_at = time.time()
                 record_guess_stats(
                     sess.account_username,
                     wpm,
@@ -571,12 +572,11 @@ rooms: dict[str, Room] = {}
 
 room_subscribers: dict[str, set[asyncio.Event]] = defaultdict(set)
 room_timers: dict[str, asyncio.TimerHandle] = {}
+disconnect_timers: dict[str, asyncio.TimerHandle] = {}
 
 
-def room_changed(code: str) -> None:
-    """Wake SSE subscribers and reschedule the timer for the next deadline."""
-    for ev in room_subscribers.get(code, set()):
-        ev.set()
+def _arm_room_timer(code: str) -> None:
+    """Cancel any pending timer and schedule the next deadline for this room."""
     handle = room_timers.pop(code, None)
     if handle:
         handle.cancel()
@@ -592,11 +592,36 @@ def room_changed(code: str) -> None:
     room_timers[code] = loop.call_later(delay, _room_timer_fire, code)
 
 
+def room_changed(code: str) -> None:
+    """Wake SSE subscribers and reschedule the timer for the next deadline."""
+    for ev in room_subscribers.get(code, set()):
+        ev.set()
+    _arm_room_timer(code)
+
+
 def _room_timer_fire(code: str) -> None:
     room_timers.pop(code, None)
     room = rooms.get(code)
     if room:
         room.tick()
+
+
+def _schedule_disconnect_forfeit(code: str, sid: str) -> None:
+    room = rooms.get(code)
+    if not room or room.visibility in ("solo", "local"):
+        return
+    if sid not in room.sessions:
+        return  # already forfeited (e.g. sendBeacon beat the SSE drop)
+    loop = asyncio.get_running_loop()
+    handle = loop.call_later(DISCONNECT_GRACE, _disconnect_forfeit, code, sid)
+    disconnect_timers[sid] = handle
+
+
+def _disconnect_forfeit(code: str, sid: str) -> None:
+    disconnect_timers.pop(sid, None)
+    room = rooms.get(code)
+    if room:
+        room.forfeit(sid)  # no-op if sid not in sessions
 
 
 def feedback(title: str, body: str, type: str = "error") -> dict[str, str]:
@@ -609,6 +634,9 @@ def purge_stale() -> None:
     for c in stale_rooms:
         for sid in rooms[c].sessions:
             sessions.pop(sid, None)
+            handle = disconnect_timers.pop(sid, None)
+            if handle:
+                handle.cancel()
         # Notify subscribers before deleting so they see the room is gone
         for ev in room_subscribers.pop(c, set()):
             ev.set()
@@ -647,19 +675,19 @@ def make_room_code() -> str:
             return code
 
 
+_NAME_RE = re.compile(r"[^A-Za-z0-9 '_-]")
+
+
+def clean_name(raw: str, fallback: str = "Player") -> str:
+    return _NAME_RE.sub('', raw).strip()[:24] or fallback
+
+
 def get_session(request: Request) -> Session | None:
     sid = request.cookies.get("session_id")
     if not sid:
         return None
     return sessions.get(sid)
 
-
-def verify_session_owner(request: Request, sess: Session) -> bool:
-    user = get_current_user(request)
-    if sess.account_username and user == sess.account_username:
-        return True
-    owner_tok = request.cookies.get("session_owner")
-    return bool(sess.owner_token and owner_tok and hmac.compare_digest(owner_tok, sess.owner_token))
 
 
 def require_session(
@@ -675,7 +703,7 @@ def require_session(
                 status_code=429,
             )
     sess = get_session(request)
-    if not sess or not verify_session_owner(request, sess):
+    if not sess:
         return None, HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
     return sess, None
 
@@ -752,6 +780,14 @@ def is_name_reserved(player_name: str, account_username: str | None) -> bool:
         )
 
 
+def _load_highest_tier(username: str) -> str:
+    row = db.execute("SELECT tiers_cleared FROM users WHERE username=?", (username,)).fetchone()
+    if not row or not row["tiers_cleared"]:
+        return ""
+    tiers = [t for t in row["tiers_cleared"].split(",") if t in DIFFICULTIES]
+    return max(tiers, key=DIFFICULTIES.index) if tiers else ""
+
+
 def record_guess_stats(
     username: str | None,
     wpm: float,
@@ -802,7 +838,7 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "create_room": (5, 60),
     "chat": (10, 30),
     "guess": (60, 60),
-    "draft": (300, 60),
+    "draft": (60, 60),
 }
 
 
@@ -1026,8 +1062,6 @@ async def guess(request: Request) -> HTMLResponse:
         room = rooms.get(sess.room_code)
         if room and room.visibility == "local":
             is_local = True
-        elif not verify_session_owner(request, sess):
-            sess = None
 
     if is_local and room:
         # For local mode, verify the cookie contains the active session
@@ -1045,7 +1079,7 @@ async def guess(request: Request) -> HTMLResponse:
         return Response(status_code=204)
 
     form = await request.form()
-    guess_text = str(form.get("guess", "")).strip()
+    guess_text = re.sub(r'[^A-Za-z]', '', str(form.get("guess", "")))[:MAX_WORD_LEN]
     room.submit_guess(sess, guess_text)
 
     if room.visibility in ("solo", "local") and is_local:
@@ -1092,7 +1126,7 @@ async def room_create(request: Request) -> HTMLResponse:
             sid = make_session_id()
             sess = Session(
                 id=sid,
-                player_name=(name.strip()[:24] or f"Player {i + 1}"),
+                player_name=clean_name(name, f"Player {i + 1}"),
                 difficulty=difficulty,
                 room_code=code,
                 ip=ip,
@@ -1118,7 +1152,7 @@ async def room_create(request: Request) -> HTMLResponse:
         return resp
 
     # Solo or private lobby
-    player_name = str(form.get("player_name", "Player")).strip()[:24] or "Player"
+    player_name = clean_name(str(form.get("player_name", "")))
     if is_name_reserved(player_name, user):
         return HTMLResponse(
             "<p class='feedback error'>That name belongs to a registered account.</p>",
@@ -1133,10 +1167,8 @@ async def room_create(request: Request) -> HTMLResponse:
         account_username=user,
         ip=ip,
     )
-    owner_token: str | None = None
-    if not user:
-        owner_token = secrets.token_urlsafe(16)
-        sess.owner_token = owner_token
+    if user:
+        sess.highest_tier = _load_highest_tier(user)
     sessions[sid] = sess
 
     room = Room(code=code, difficulty=difficulty, visibility=visibility, sessions=[sid])
@@ -1147,8 +1179,6 @@ async def room_create(request: Request) -> HTMLResponse:
 
     resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
     resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
-    if owner_token:
-        resp.set_cookie("session_owner", owner_token, httponly=True, samesite="lax", path="/")
     return resp
 
 
@@ -1159,8 +1189,8 @@ async def room_join(request: Request) -> HTMLResponse:
         return err
 
     form = await request.form()
-    code = str(form.get("room_code", "")).strip().upper()
-    player_name = str(form.get("player_name", "Player")).strip()[:24] or "Player"
+    code = re.sub(r'[^A-Z0-9]', '', str(form.get("room_code", "")).upper())[:6]
+    player_name = clean_name(str(form.get("player_name", "")))
 
     room = rooms.get(code)
     if not room:
@@ -1185,10 +1215,8 @@ async def room_join(request: Request) -> HTMLResponse:
         account_username=user,
         ip=ip,
     )
-    owner_token: str | None = None
-    if not user:
-        owner_token = secrets.token_urlsafe(16)
-        sess.owner_token = owner_token
+    if user:
+        sess.highest_tier = _load_highest_tier(user)
     sessions[sid] = sess
     room.sessions.append(sid)
     room.last_activity = time.time()
@@ -1201,8 +1229,6 @@ async def room_join(request: Request) -> HTMLResponse:
 
     resp = tpl(request, "fragments/room.html", build_room_ctx(request, room, sess))
     resp.set_cookie("session_id", sid, httponly=True, samesite="lax", path="/")
-    if owner_token:
-        resp.set_cookie("session_owner", owner_token, httponly=True, samesite="lax", path="/")
     return resp
 
 
@@ -1262,6 +1288,8 @@ async def public_join(request: Request) -> HTMLResponse:
         account_username=user,
         ip=ip,
     )
+    if user:
+        sess.highest_tier = _load_highest_tier(user)
     sessions[sid] = sess
     target_room.sessions.append(sid)
     target_room.last_activity = time.time()
@@ -1277,7 +1305,6 @@ async def public_join(request: Request) -> HTMLResponse:
 
 
 def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, Any]:
-    room.tick()
     active_sid = active_session_id(room)
     is_active = viewer.id == active_sid
     active_sess = sessions.get(active_sid) if active_sid else None
@@ -1298,15 +1325,6 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
             status = "Eliminated"
         elif sid == active_sid:
             status = "Spelling"
-        highest_tier = ""
-        if s.account_username:
-            tr = db.execute(
-                "SELECT tiers_cleared FROM users WHERE username=?", (s.account_username,)
-            ).fetchone()
-            if tr and tr["tiers_cleared"]:
-                tiers = [t for t in tr["tiers_cleared"].split(",") if t and t in DIFFICULTIES]
-                if tiers:
-                    highest_tier = max(tiers, key=DIFFICULTIES.index)
         players.append(
             {
                 "sid": sid,
@@ -1315,7 +1333,7 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
                 "is_viewer": sid == viewer.id,
                 "eliminated": sid in room.eliminated,
                 "account": s.account_username,
-                "highest_tier": highest_tier,
+                "highest_tier": s.highest_tier,
             },
         )
 
@@ -1374,12 +1392,10 @@ def build_room_ctx(request: Request, room: Room, viewer: Session) -> dict[str, A
             )
 
         if room.turn_deadline > 0:
-            ctx["time_remaining"] = max(0, room.turn_deadline - time.time())
+            ctx["turn_deadline"] = room.turn_deadline
             ctx["time_limit"] = room.turn_time_limit
 
         ctx["draft_text"] = room.draft_text
-        if viewer.board_glow and time.time() - viewer.board_glow_at < 1.5:
-            ctx["board_glow"] = viewer.board_glow
 
     if room.visibility == "solo":
         ctx["streak"] = viewer.streak
@@ -1407,6 +1423,13 @@ async def room_stream(request: Request, code: str):
     if not room or not sess or sess.room_code != code:
         return Response(status_code=403)
 
+    sid = sess.id
+
+    # Cancel any pending disconnect timer (player is reconnecting)
+    handle = disconnect_timers.pop(sid, None)
+    if handle:
+        handle.cancel()
+
     ev = asyncio.Event()
     room_subscribers[code].add(ev)
 
@@ -1421,6 +1444,7 @@ async def room_stream(request: Request, code: str):
             room_subscribers[code].discard(ev)
             if code in room_subscribers and not room_subscribers[code]:
                 del room_subscribers[code]
+            _schedule_disconnect_forfeit(code, sid)
 
     return EventSourceResponse(gen(), ping=15)
 
@@ -1438,9 +1462,19 @@ async def room_draft(request: Request, code: str) -> Response:
         return Response(status_code=403)
 
     form = await request.form()
-    draft = str(form.get("draft", ""))[:MAX_DRAFT_LEN]
+    draft = re.sub(r'[^A-Za-z]', '', str(form.get("draft", "")))[:MAX_WORD_LEN]
     room.set_draft(draft)
     return Response(status_code=204)
+
+
+@app.get("/room/{code}/draft-text")
+async def get_draft_text(code: str, h: str = "") -> Response:
+    room = rooms.get(code)
+    if not room:
+        return Response(status_code=404)
+    if h == room.draft_text:
+        return Response(status_code=204)
+    return Response(room.draft_text, media_type="text/plain")
 
 
 @app.post("/room/{code}/chat", response_class=HTMLResponse)
@@ -1508,7 +1542,7 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
             return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
     else:
         sess = get_session(request)
-        if not sess or not verify_session_owner(request, sess) or sess.room_code != code:
+        if not sess or sess.room_code != code:
             return HTMLResponse("<p class='feedback error'>Invalid session.</p>", status_code=403)
 
     for sid in room.sessions:
@@ -1525,7 +1559,7 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
 async def leaderboard(request: Request) -> HTMLResponse:
     rows = db.execute(
         "SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak, tiers_cleared"
-        " FROM users ORDER BY elo DESC"
+        " FROM users ORDER BY elo DESC LIMIT 100"
     ).fetchall()
     return tpl(request, "fragments/leaderboard.html", {"players": rows})
 
