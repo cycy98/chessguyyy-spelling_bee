@@ -337,7 +337,7 @@
         "lithotripsy": {"part_of_speech": "noun", "definition": "a medical procedure that breaks kidney stones into small pieces", "homophones": []},
         "ljubljana": {"part_of_speech": "noun", "definition": "the capital of Slovenia", "homophones": []},
         "logarithmic": {"part_of_speech": "adjective", "definition": "pertaining to a mathematical scale where equal intervals represent equal multiplicative changes", "homophones": []},
-        "logorrhea": {"part_of_speech": "noun", "definition": "excessive wordiness", "homophones": ["logorrhoea"]},
+        "logorrhea": {"part_of_speech": "noun", "definition": "excessive wordiness", "homophones": ["logorrhoea", "logorrhœa"]},
         "luminescence": {"part_of_speech": "noun", "definition": "light produced without heat", "homophones": []},
         "mellifluous": {"part_of_speech": "adjective", "definition": "sweet or musical; pleasant to hear", "homophones": []},
         "metacognition": {"part_of_speech": "noun", "definition": "awareness and understanding of one's own thought processes", "homophones": []},
