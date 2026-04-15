@@ -41,8 +41,8 @@ from backend.game import (
     room_host_sid,
     validate_difficulty,
 )
-from persistence import (
-    _load_highest_tier,
+from backend.persistence import (
+    load_highest_tier,
     is_name_reserved,
     persist_match_elo,
     record_guess_stats,
@@ -415,7 +415,7 @@ async def room_create(request: Request) -> HTMLResponse:
         )
     room = state.make_room(code, difficulty, visibility)
     state.game.rooms[code] = room
-    highest_tier = await _load_highest_tier(user) if user else ""
+    highest_tier = await load_highest_tier(user) if user else ""
     sess = state.game.add_player_to_room(
         room,
         player_name,
@@ -456,7 +456,7 @@ async def room_join(request: Request) -> HTMLResponse:
             "<p class='feedback error'>That name belongs to a registered account.</p>",
         )
     ip = client_ip(request)
-    highest_tier = await _load_highest_tier(user) if user else ""
+    highest_tier = await load_highest_tier(user) if user else ""
     sess = state.game.add_player_to_room(
         room,
         player_name,
@@ -511,7 +511,7 @@ async def public_join(request: Request) -> HTMLResponse:
         target_room = state.make_room(code, difficulty, "public")
         state.game.rooms[code] = target_room
 
-    highest_tier = await _load_highest_tier(user)
+    highest_tier = await load_highest_tier(user)
     sess = state.game.add_player_to_room(
         target_room,
         user,
