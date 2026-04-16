@@ -1,6 +1,6 @@
 __pycache__/
 *pyc
-*db
+*db*
 *md
 *sh
 audios/

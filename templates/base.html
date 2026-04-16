@@ -174,7 +174,7 @@
                     swap: 'morph:outerHTML',
                     select: '#room-state',
                     values: {
-                        guess: (text || '').replace(/[^A-Za-z]/g, ''),
+                        guess: (text || '').replace(/[^A-Za-zéíō]/g, ''),
                         typing_ms: typingMs,
                     }
                 });

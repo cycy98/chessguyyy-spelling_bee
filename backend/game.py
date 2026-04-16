@@ -49,6 +49,7 @@ class MatchResult(TypedDict):
 def display_mode(vis: Visibility) -> str:
     return vis if vis in ("solo", "local") else ("public" if vis == "public" else "lobby")
 
+
 # ── Config ───
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -56,7 +57,7 @@ MAX_CHAT = 80
 MAX_CHAT_LEN = 150
 MAX_WORD_LEN = 50
 STALE_MINUTES = 30
-NETWORK_GRACE = 1.5  # seconds of submit-POST cushion on the deadline — absorbs round-trip latency after visible timer expires
+NETWORK_GRACE = 1.0  # seconds of submit-POST cushion on the deadline - absorbs round-trip latency after visible timer expires
 MAX_CHARS_PER_SEC = 12  # physics floor for typing speed — bounds client-reported typing_ms
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
@@ -97,7 +98,7 @@ class Catalog:
         self._all_word_keys = list(self.all_words)
 
     @classmethod
-    def load(cls, root: Path) -> "Catalog":
+    def load(cls, root: Path) -> Catalog:
         with (root / "wordlist.json").open() as f:
             raw: dict[str, Any] = json.load(f)
         return cls(
@@ -109,11 +110,11 @@ class Catalog:
     def pick_word(self, difficulty: str) -> WordEntry:
         if difficulty == "randomizer":
             word_str = secrets.choice(self._all_word_keys)
-            return cast(WordEntry, {"word": word_str, **self.all_words[word_str]})
+            return cast("WordEntry", {"word": word_str, **self.all_words[word_str]})
         keys = self._word_keys.get(difficulty, self._word_keys[self.difficulties[0]])
         pool = self.words.get(difficulty, self.words[self.difficulties[0]])
         word_str = secrets.choice(keys)
-        return cast(WordEntry, {"word": word_str, **pool[word_str], "tier": difficulty})
+        return cast("WordEntry", {"word": word_str, **pool[word_str], "tier": difficulty})
 
     def has_audio(self, word: str) -> bool:
         return word.lower() in self.audio_durations
@@ -124,7 +125,11 @@ class Catalog:
         return self.difficulties[0]
 
     def template_ctx(self) -> dict[str, Any]:
-        return {"difficulties": self.difficulties, "words": self.words, "total_words": self.total_words}
+        return {
+            "difficulties": self.difficulties,
+            "words": self.words,
+            "total_words": self.total_words,
+        }
 
 
 def _load_audio_durations(root: Path) -> dict[str, float]:
@@ -198,7 +203,7 @@ class Room:
     word_audio_duration: float = 0.0
     # Injected at construction; defaults to empty/None so Room is usable in tests.
     sessions_map: dict[str, Session] = field(default_factory=dict, repr=False)
-    catalog: "Catalog | None" = field(default=None, repr=False)
+    catalog: Catalog | None = field(default=None, repr=False)
 
     # --- State-transition methods ---
 
@@ -337,8 +342,7 @@ class Room:
                 t = result.tier
                 diffs = self.catalog.difficulties
                 if t in diffs and (
-                    not sess.highest_tier
-                    or diffs.index(t) > diffs.index(sess.highest_tier)
+                    not sess.highest_tier or diffs.index(t) > diffs.index(sess.highest_tier)
                 ):
                     sess.highest_tier = t
             body = f"{result.wpm} WPM."
@@ -374,7 +378,10 @@ class Room:
             return None, None
 
         elapsed = typing_window_s(
-            typing_ms, guess_text, self.word_served_at, self.word_audio_duration,
+            typing_ms,
+            guess_text,
+            self.word_served_at,
+            self.word_audio_duration,
         )
         is_solo = self.visibility == "solo"
 
@@ -492,7 +499,10 @@ def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) ->
 
 
 def typing_window_s(
-    typing_ms: int | None, guess: str, served_at: float, audio_duration: float,
+    typing_ms: int | None,
+    guess: str,
+    served_at: float,
+    audio_duration: float,
 ) -> float:
     """Typing window in seconds. Trusts client-reported ms above a physics floor;
     falls back to server elapsed (minus audio) when the client doesn't report."""
@@ -532,5 +542,3 @@ def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
     denom = sum(_exp(p["elo"]) for p in players)
     for p in players:
         p["elo"] += k * ((n - p["rank"]) / norm - _exp(p["elo"]) / denom)
-
-

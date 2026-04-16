@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import Request
-from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from backend.auth import get_current_user
+
+if TYPE_CHECKING:
+    from fastapi import Request
+    from fastapi.responses import HTMLResponse
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.autoescape = True  # type: ignore[assignment]

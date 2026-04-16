@@ -21,7 +21,8 @@ async def register(request: Request) -> HTMLResponse:
     state = request.app.state.srv
     ip = client_ip(request)
     if not state.check_rate(ip, "register"):
-        raise HtmxError("Too many attempts. Try again later.", 429)
+        msg = "Too many attempts. Try again later."
+        raise HtmxError(msg, 429)
 
     form = await request.form()
     username = str(form.get("username", "")).strip()
@@ -57,7 +58,8 @@ async def login(request: Request) -> HTMLResponse:
     state = request.app.state.srv
     ip = client_ip(request)
     if not state.check_rate(ip, "login"):
-        raise HtmxError("Too many attempts. Try again later.", 429)
+        msg = "Too many attempts. Try again later."
+        raise HtmxError(msg, 429)
 
     form = await request.form()
     username = str(form.get("username", "")).strip()

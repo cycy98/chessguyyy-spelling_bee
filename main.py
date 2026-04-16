@@ -11,19 +11,17 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
-from starlette.responses import Response as StarletteResponse
 
 from backend import db
 from backend.auth import _session_cookie_kwargs, get_current_user, set_session_cookie
 from backend.errors import HtmxError
 from backend.game import (
-    Catalog,
     MAX_CHAT_LEN,
     MAX_LOCAL_PLAYERS,
     MAX_PLAYERS,
@@ -32,9 +30,10 @@ from backend.game import (
     RATE_LIMITS,
     ROOT,
     STALE_MINUTES,
-    Visibility,
+    Catalog,
     Room,
     Session,
+    Visibility,
     active_session_id,
     alive_sessions,
     clean_name,
@@ -44,15 +43,17 @@ from backend.game import (
     room_host_sid,
 )
 from backend.persistence import (
-    load_highest_tier,
     is_name_reserved,
+    load_highest_tier,
     persist_match_elo,
     record_guess_stats,
 )
 from routes.account import router as account_router
 from routes.auth import router as auth_router
-from templating import client_ip, tpl, templates
+from templating import client_ip, templates, tpl
 
+if TYPE_CHECKING:
+    from starlette.responses import Response as StarletteResponse
 
 
 class ImmutableStaticFiles(StaticFiles):
@@ -153,13 +154,15 @@ class AppState:
                 handle.cancel()
             del self.rooms[c]
         stale_sessions = [
-            s for s, sess in self.sessions.items()
+            s
+            for s, sess in self.sessions.items()
             if (sess.room_code and sess.room_code not in self.rooms) or sess.last_activity < cutoff
         ]
         for s in stale_sessions:
             self.sessions.pop(s, None)
         stale_ips = [
-            ip for ip, actions in self.rate_buckets.items()
+            ip
+            for ip, actions in self.rate_buckets.items()
             if all(not ts for ts in actions.values())
         ]
         for ip in stale_ips:
@@ -247,10 +250,12 @@ def require_session(
     if rate_key:
         ip = client_ip(request)
         if not state.check_rate(ip, rate_key):
-            raise HtmxError("Too many attempts. Try again later.", 429)
+            msg = "Too many attempts. Try again later."
+            raise HtmxError(msg, 429)
     sess = get_session(state, request)
     if not sess:
-        raise HtmxError("Invalid session.", 403)
+        msg = "Invalid session."
+        raise HtmxError(msg, 403)
     return sess
 
 
@@ -262,10 +267,12 @@ def require_room(
 ) -> tuple[Session, Room]:
     sess = require_session(state, request, rate_key)
     if sess.room_code != code:
-        raise HtmxError("Not in this room.", 403)
+        msg = "Not in this room."
+        raise HtmxError(msg, 403)
     room = state.rooms.get(code)
     if not room:
-        raise HtmxError("Room not found.", 404)
+        msg = "Room not found."
+        raise HtmxError(msg, 404)
     return sess, room
 
 
@@ -273,10 +280,12 @@ def check_creation_limits(state: AppState, request: Request) -> None:
     """Rate-check + stale purge + session-count guard. Raises HtmxError on failure."""
     ip = client_ip(request)
     if not state.check_rate(ip, "create_room"):
-        raise HtmxError("Too many attempts. Try again later.", 429)
+        msg = "Too many attempts. Try again later."
+        raise HtmxError(msg, 429)
     state.purge_stale()
     if state.count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
-        raise HtmxError("Too many active sessions.", 429)
+        msg = "Too many active sessions."
+        raise HtmxError(msg, 429)
 
 
 # ── Middleware ──
@@ -455,7 +464,8 @@ async def guess(request: Request) -> HTMLResponse:
     state: AppState = request.app.state.srv
     ip = client_ip(request)
     if not state.check_rate(ip, "guess"):
-        raise HtmxError("Too many attempts.", 429)
+        msg = "Too many attempts."
+        raise HtmxError(msg, 429)
 
     sess = get_session(state, request)
     room: Room | None = None
@@ -466,18 +476,20 @@ async def guess(request: Request) -> HTMLResponse:
             local_sids = request.cookies.get("local_sessions", "").split(",")
             active_sid = active_session_id(room)
             if active_sid not in local_sids:
-                raise HtmxError("Invalid session.", 403)
+                msg = "Invalid session."
+                raise HtmxError(msg, 403)
             sess = state.sessions.get(active_sid) if active_sid else None
 
     if not sess or not sess.room_code:
-        raise HtmxError("Invalid session.", 403)
+        msg = "Invalid session."
+        raise HtmxError(msg, 403)
     if not room:
         room = state.rooms.get(sess.room_code)
     if not room or active_session_id(room) != sess.id or not room.current_word:
         return Response(status_code=204)
 
     form = await request.form()
-    guess_text = re.sub(r"[^A-Za-z]", "", str(form.get("guess", "")))[:MAX_WORD_LEN]
+    guess_text = "".join(c for c in str(form.get("guess", "")) if c.isalpha())[:MAX_WORD_LEN]
     typing_ms: int | None = None
     raw_tm = form.get("typing_ms")
     if raw_tm is not None:
@@ -519,7 +531,9 @@ async def room_create(request: Request) -> HTMLResponse:
     check_creation_limits(state, request)
 
     form = await request.form()
-    difficulty = state.catalog.validate_difficulty(str(form.get("difficulty", state.catalog.difficulties[0])))
+    difficulty = state.catalog.validate_difficulty(
+        str(form.get("difficulty", state.catalog.difficulties[0])),
+    )
     visibility: Visibility = "private"
     raw_vis = str(form.get("visibility", "private"))
     if raw_vis in ("private", "solo", "local"):
@@ -533,9 +547,11 @@ async def room_create(request: Request) -> HTMLResponse:
         try:
             raw = json.loads(str(form.get("players", "[]")))
         except (json.JSONDecodeError, ValueError):
-            raise HtmxError("Invalid player list.", 400)
+            msg = "Invalid player list."
+            raise HtmxError(msg, 400)
         if not isinstance(raw, list) or not raw or not all(isinstance(n, str) for n in raw):
-            raise HtmxError("Invalid player list.", 400)
+            msg = "Invalid player list."
+            raise HtmxError(msg, 400)
         names: list[str] = raw
         room = state.make_room(code, difficulty, "local")
         all_sids: list[str] = []
@@ -630,17 +646,22 @@ async def public_join(request: Request) -> HTMLResponse:
     state: AppState = request.app.state.srv
     ip = client_ip(request)
     if not state.check_rate(ip, "create_room"):
-        raise HtmxError("Too many attempts. Try again later.", 429)
+        msg = "Too many attempts. Try again later."
+        raise HtmxError(msg, 429)
 
     user = get_current_user(request)
     if not user:
-        raise HtmxError("Login required for Public Arena.", 403)
+        msg = "Login required for Public Arena."
+        raise HtmxError(msg, 403)
 
     if state.count_sessions_for_ip(ip) >= MAX_SESSIONS_PER_IP:
-        raise HtmxError("Too many active sessions.", 429)
+        msg = "Too many active sessions."
+        raise HtmxError(msg, 429)
 
     form = await request.form()
-    difficulty = state.catalog.validate_difficulty(str(form.get("difficulty", state.catalog.difficulties[0])))
+    difficulty = state.catalog.validate_difficulty(
+        str(form.get("difficulty", state.catalog.difficulties[0])),
+    )
 
     state.purge_stale()
 
@@ -741,7 +762,9 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
         ctx["part_of_speech"] = word_data["part_of_speech"]
 
         ctx["audio_url"] = (
-            f"audios/{word_data['word'].lower()}.mp3" if state.catalog.has_audio(word_data["word"]) else None
+            f"audios/{word_data['word'].lower()}.mp3"
+            if state.catalog.has_audio(word_data["word"])
+            else None
         )
         ctx["audio_duration"] = room.word_audio_duration
         ctx["word_served_at"] = room.word_served_at
@@ -760,7 +783,9 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
             )
 
         if room.turn_deadline > 0:
-            ctx["time_remaining"] = min(room.turn_time_limit, max(0, room.turn_deadline - time.time()))
+            ctx["time_remaining"] = min(
+                room.turn_time_limit, max(0, room.turn_deadline - time.time()),
+            )
             ctx["time_limit"] = room.turn_time_limit
 
         ctx["draft_text"] = room.draft_text
@@ -825,11 +850,10 @@ async def room_draft(request: Request, code: str) -> Response:
         return Response(status_code=403)
 
     form = await request.form()
-    draft = re.sub(r"[^A-Za-z]", "", str(form.get("draft", "")))[:MAX_WORD_LEN]
+    draft = "".join(c for c in str(form.get("draft", "")) if c.isalpha())[:MAX_WORD_LEN]
     room.set_draft(draft)
     state.draft_changed(code, draft)
     return Response(status_code=204)
-
 
 
 @app.post("/room/{code}/chat", response_class=HTMLResponse)
@@ -853,7 +877,8 @@ async def room_lock_toggle(request: Request, code: str) -> Response:
     if room.visibility != "private":
         return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
     if sess.id != room_host_sid(room):
-        raise HtmxError("Only the host can lock.", 403)
+        msg = "Only the host can lock."
+        raise HtmxError(msg, 403)
     room.toggle_lock()
     state.room_changed(code)
     return Response(status_code=204)
@@ -883,7 +908,7 @@ async def forfeit(request: Request) -> HTMLResponse:
 async def room_restart(request: Request, code: str) -> HTMLResponse:
     """Restart a solo/local game."""
     state: AppState = request.app.state.srv
-    sess, room = require_room(state, request, code)
+    _sess, room = require_room(state, request, code)
     if room.visibility not in ("solo", "local"):
         return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
 
@@ -895,11 +920,7 @@ async def room_restart(request: Request, code: str) -> HTMLResponse:
     state.room_changed(code)
 
     active_sid = active_session_id(room)
-    viewer = (
-        state.sessions.get(active_sid)
-        if active_sid
-        else state.sessions.get(room.sessions[0])
-    )
+    viewer = state.sessions.get(active_sid) if active_sid else state.sessions.get(room.sessions[0])
     return await tpl(request, "fragments/room.html", build_room_ctx(state, room, viewer))
 
 
