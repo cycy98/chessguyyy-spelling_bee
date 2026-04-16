@@ -1,28 +1,51 @@
-{# Room state fragment — rendered per-viewer, pushed via SSE #}
-<div class="room-state" data-room-code="{{ room.code }}" data-room-mode="{{ mode }}"
-    {% if mode not in ('solo', 'local') %}hx-ext="sse" sse-connect="room/{{ room.code }}/stream" hx-get="room/{{ room.code }}" hx-trigger="sse:refresh" hx-target="#game-area" hx-swap="morph:innerHTML"{% endif %}
-    x-init="$nextTick(() => {
+{# Room fragment — rendered on room entry. Contains game nav chrome + SSE-morphed room state. #}
+<nav class="game-nav">
+    <strong class="game-title">
+        {% if mode == 'solo' %}Solo
+        {% elif mode == 'local' %}Local
+        {% elif mode == 'public' %}Public Arena
+        {% else %}Lobby {{ room.code }}
+        {% endif %}
+    </strong>
+    <div role="group">
+        <button class="outline secondary small" @click="muted = !muted"
+            x-text="muted ? 'Unmute' : 'Mute'"></button>
+        <input type="range" min="0" max="1" step="0.1"
+            x-model.number="volume" :disabled="muted"
+            style="width:80px;margin:0" />
+        <button class="outline secondary small" @click="mainMenu()">Exit</button>
+    </div>
+</nav>
+
+<div id="room-state" class="room-state"
+    x-init="roomCode = '{{ room.code }}'; $nextTick(() => {
         {% if audio_url and not room.winner and not waiting_for_players %}
         const _wk = '{{ audio_url }}|{{ word_served_at }}';
         if (lastWordKey !== _wk) {
             lastWordKey = _wk;
+            audioEndedAt = 0;
             playAudio('{{ audio_url }}', {{ 'true' if is_active else 'false' }}, {{ audio_duration }});
         }
+        {% elif not room.winner and not waiting_for_players %}
+        const _wk = 'noaudio|{{ word_served_at }}';
+        if (lastWordKey !== _wk) {
+            lastWordKey = _wk;
+            audioEndedAt = performance.now();
+        }
+        inputLocked = false;
         {% else %}
         inputLocked = false;
         {% endif %}
     })"
-    x-data="{}">
+    {% if mode not in ('solo', 'local') %}hx-ext="sse" sse-connect="room/{{ room.code }}/stream" hx-get="room/{{ room.code }}" hx-trigger="sse:refresh" hx-target="#room-state" hx-select="#room-state" hx-swap="morph:outerHTML"{% endif %}>
 
     <!-- Status Row -->
     <div class="status-row">
-        <span class="player-name">{{ viewer.player_name }}</span>
-        <span class="diff-badge" data-tier="{{ room.difficulty }}">
-            {{ room.difficulty | capitalize }}
-        </span>
-        <span class="room-code-badge">{{ room.code }}</span>
+        <strong>{{ viewer.player_name }}</strong>
+        <kbd data-tier="{{ room.difficulty }}">{{ room.difficulty | capitalize }}</kbd>
+        <kbd>{{ room.code }}</kbd>
         {% if mode == 'lobby' and is_host %}
-        <button class="small outline secondary" style="margin-left:auto; padding:4px 10px; font-size:0.75rem"
+        <button class="small outline secondary" style="margin-left:auto"
             x-data="{locked: {{ 'true' if room_locked else 'false' }}}"
             @click="locked = !locked; fetch('room/{{ room.code }}/lock', {method: 'POST'})"
             x-text="locked ? 'Unlock' : 'Lock'">
@@ -32,74 +55,72 @@
 
     <div class="game-layout">
         <!-- Main Area -->
-        <div class="game-main">
+        <div>
             {% if waiting_for_players %}
-            <article class="waiting-card">
+            <article style="text-align:center;padding:2.5rem">
                 <h3>Waiting for players...</h3>
-                <p>Share room code: <strong>{{ room.code }}</strong></p>
+                <p>Share room code: <kbd style="font-size:1.2rem;letter-spacing:0.2em">{{ room.code }}</kbd></p>
             </article>
             {% elif room.winner %}
-            <!-- Intermission / Game Over -->
-            <article class="clue-card">
-                <div class="clue-header">
-                    <span class="clue-pos">Game Over</span>
-                </div>
-                <p class="clue-def">{{ room.winner }} wins!</p>
-                {% if intermission_until is defined and intermission_until %}
-                <div class="timer"
-                     data-deadline="{{ intermission_until }}"
-                     x-data="{ remaining: 0, get pct() { return Math.max(0, this.remaining / 15 * 100) } }"
+            <!-- Game Over -->
+            <article>
+                <hgroup>
+                    <h3>Game Over</h3>
+                    <p>{{ room.winner }} wins!</p>
+                </hgroup>
+                {% if intermission_remaining is defined and intermission_remaining %}
+                <div x-data="{ remaining: {{ intermission_remaining | round(2) }}, total: 15, get pct() { return Math.max(0, this.remaining / this.total * 100) } }"
                      x-init="
-                         remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                         const deadline = Date.now()/1000 + remaining;
                          const iv = setInterval(() => {
-                             remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
+                             if (!document.contains($el)) { clearInterval(iv); return; }
+                             remaining = Math.max(0, deadline - Date.now()/1000);
                              if (remaining === 0) clearInterval(iv);
                          }, 250);
-                         $cleanup(() => clearInterval(iv));
                      ">
                     <div class="timer-info">
-                        <span class="timer-label">Next game in</span>
-                        <span class="timer-time" x-text="Math.ceil(remaining) + 's'"></span>
+                        <span>Next game in</span>
+                        <span x-text="Math.ceil(remaining) + 's'"></span>
                     </div>
-                    <progress :value="remaining" :max="15"
+                    <progress :value="remaining" :max="total"
                         :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
                 </div>
                 {% endif %}
             </article>
             {% if feedback %}
-            <article class="feedback-card {{ feedback.type }}">
-                <strong>{{ feedback.title }}</strong>
-                {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
+            <article class="feedback-border feedback-{{ feedback.type }}">
+                <strong class="feedback-text">{{ feedback.title }}</strong>
+                {% if feedback.body %}<p><small>{{ feedback.body }}</small></p>{% endif %}
             </article>
             {% endif %}
             {% if mode in ('solo', 'local') %}
-            <div class="controls" role="group">
-                <button hx-post="room/{{ room.code }}/restart" hx-target="#game-area" hx-swap="innerHTML">Play Again</button>
+            <div role="group">
+                <button hx-post="room/{{ room.code }}/restart" hx-target="#room-state" hx-select="#room-state" hx-swap="morph:outerHTML">Play Again</button>
             </div>
             {% endif %}
             {% else %}
             <!-- Active Game -->
             {% if definition is defined and definition %}
-            <article class="clue-card">
-                <div class="clue-header">
-                    <span class="clue-pos">{{ part_of_speech }}</span>
-                    <span class="clue-letters">{{ word_length }} letters</span>
-                </div>
-                <p class="clue-def">{{ definition }}</p>
+            <article>
+                <hgroup>
+                    <p>
+                        <small>{{ part_of_speech }}</small>
+                        <mark>{{ word_length }} letters</mark>
+                        {% if streak is defined and streak >= 2 %}<kbd style="background:var(--amber);color:#1a1a2e">{{ streak }} streak</kbd>{% endif %}
+                    </p>
+                    <p>{{ definition }}</p>
+                </hgroup>
             </article>
             {% endif %}
 
             {% if audio_url is defined and audio_url %}
-            <span data-audio-url="{{ audio_url }}" style="display:none"></span>
+            <span data-audio-url="{{ audio_url }}" hidden></span>
             {% endif %}
 
             <!-- Board -->
-            <div class="board-wrapper">
-                {% if streak is defined and streak >= 2 %}
-                <div class="streak-badge">{{ streak }} streak</div>
-                {% endif %}
+            <div class="board-wrapper"{% if feedback %} data-feedback="{{ feedback.type }}"{% endif %} style="margin-bottom:12px">
                 {% if is_active %}
-                <textarea id="guess-input" name="draft" class="board-input"
+                <input id="guess-input" name="draft" type="text" class="board-input"
                     x-model="guessText"
                     :disabled="inputLocked"
                     autofocus
@@ -109,116 +130,98 @@
                     @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-z]/g, '')"
                     placeholder="Type your answer..."
                     maxlength="50"
-                    autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
+                    autocomplete="off" autocapitalize="characters" spellcheck="false" />
                 {% else %}
                 <textarea class="board-input watcher" readonly
+                    sse-swap="draft"
                     placeholder="{{ active_player_name }} is spelling..."
-                    hx-get="room/{{ room.code }}/draft-text"
-                    hx-trigger="every 100ms"
-                    hx-swap="innerHTML"
-                    hx-vals='{"h": this.innerText}'
-                    hx-on::before-swap="if(event.detail.xhr.status === 204) event.detail.shouldSwap = false"
                     >{{ draft_text if draft_text is defined else '' }}</textarea>
                 {% endif %}
 
-                <!-- Timer -->
-                {% if turn_deadline is defined and turn_deadline and time_limit is defined %}
-                <div class="timer"
-                     data-deadline="{{ turn_deadline }}"
-                     data-total="{{ time_limit | round(1) }}"
-                     data-active="{{ 'true' if is_active else 'false' }}"
-                     x-data="{ remaining: 0, total: 0, started: false, get pct() { return this.total > 0 ? Math.max(0, this.remaining / this.total * 100) : 0 } }"
-                     x-init="
-                         total = +$el.dataset.total;
-                         const isActive = $el.dataset.active === 'true';
-                         let iv;
-                         if (isActive) {
-                             remaining = total;
-                             const check = setInterval(() => {
-                                 if (!inputLocked && !started) {
-                                     started = true;
-                                     const deadline = Date.now()/1000 + total;
-                                     iv = setInterval(() => {
-                                         remaining = Math.max(0, deadline - Date.now()/1000);
-                                         if (remaining === 0) clearInterval(iv);
-                                     }, 250);
-                                     clearInterval(check);
-                                 }
-                             }, 50);
-                             $cleanup(() => { clearInterval(check); if (iv) clearInterval(iv); });
-                         } else {
-                             remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
-                             iv = setInterval(() => {
-                                 remaining = Math.max(0, +$el.dataset.deadline - Date.now()/1000);
-                                 if (remaining === 0) clearInterval(iv);
-                             }, 250);
-                             $cleanup(() => clearInterval(iv));
-                         }
-                     ">
-                    <div class="timer-info">
-                        <span class="timer-label">Time left</span>
-                        <span class="timer-time" x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
-                    </div>
-                    <progress :value="remaining" :max="total"
-                        :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
-                </div>
+                <!-- Feedback (at point of attention, inside board area) -->
+                {% if feedback %}
+                <p class="feedback-{{ feedback.type }}" style="margin:8px 0 0">
+                    <strong class="feedback-text">{{ feedback.title }}</strong>
+                    {% if feedback.body %}<small> {{ feedback.body }}</small>{% endif %}
+                </p>
                 {% endif %}
             </div>
 
-            <!-- Controls (active player only) -->
-            {% if is_active %}
-            <div class="controls" role="group">
-                <button class="secondary" @click="replayAudio()" :disabled="inputLocked">Play Word</button>
-                <button class="outline secondary" :disabled="inputLocked" @click="submitGuess('')">Skip</button>
-                <button :disabled="inputLocked" @click="submitGuess(guessText)">Submit</button>
+            <!-- Timer (standalone, outside board) -->
+            {% if time_remaining is defined and time_remaining and time_limit is defined %}
+            <div style="margin-bottom:12px"
+                 x-data="{ remaining: {{ time_limit | round(1) }}, total: {{ time_limit | round(1) }}, _deadline: 0, get pct() { return this.total > 0 ? Math.max(0, this.remaining / this.total * 100) : 0 } }"
+                 x-init="
+                     const waitForInput = {{ 'true' if is_active else 'false' }};
+                     const initialRemaining = {{ time_remaining | round(2) }};
+                     const tick = () => {
+                         if (!document.contains($el)) { clearInterval(iv); return; }
+                         if (waitForInput && inputLocked) { remaining = total; _deadline = 0; return; }
+                         if (!_deadline) _deadline = Date.now()/1000 + (waitForInput ? total : initialRemaining);
+                         remaining = Math.min(total, Math.max(0, _deadline - Date.now()/1000));
+                         if (remaining <= 0) clearInterval(iv);
+                     };
+                     tick();
+                     const iv = setInterval(tick, 250);
+                 ">
+                <div class="timer-info">
+                    <span>Time left</span>
+                    <span x-text="Math.ceil(remaining) + 's / ' + Math.round(total) + 's'"></span>
+                </div>
+                <progress :value="remaining" :max="total"
+                    :class="{ 'timer-warn': pct < 50, 'timer-danger': pct < 20 }"></progress>
             </div>
             {% endif %}
 
-            <!-- Feedback -->
-            {% if feedback %}
-            <article class="feedback-card {{ feedback.type }}">
-                <strong>{{ feedback.title }}</strong>
-                {% if feedback.body %}<p>{{ feedback.body }}</p>{% endif %}
-            </article>
+            <!-- Controls (active player only) -->
+            {% if is_active %}
+            <div role="group" style="margin-bottom:12px">
+                <button :class="autoplayBlocked ? 'contrast' : 'secondary'" @click="replayAudio()" :disabled="inputLocked" x-text="autoplayBlocked ? 'Click to hear word' : 'Replay'"></button>
+                <button class="outline secondary" :disabled="inputLocked" @click="submitGuess('')">Skip</button>
+            </div>
             {% endif %}
             {% endif %}
         </div>
 
         <!-- Sidebar -->
-        <article class="game-sidebar"{% if mode == 'solo' %} style="display:none"{% endif %}>
+        <article class="sidebar"{% if mode == 'solo' %} hidden{% endif %}>
             {% if mode not in ('local', 'solo') %}
-            <div class="sidebar-tabs">
-                <button class="outline secondary tab-btn" :class="{ active: sideTab === 'players' }" @click="sideTab = 'players'">Players</button>
-                <button class="outline secondary tab-btn" :class="{ active: sideTab === 'chat' }" @click="sideTab = 'chat'">Chat</button>
+            <div role="group" style="margin-bottom:12px">
+                <button :class="sideTab === 'players' ? '' : 'outline'" class="secondary small" @click="sideTab = 'players'">Players</button>
+                <button :class="sideTab === 'chat' ? '' : 'outline'" class="secondary small" @click="sideTab = 'chat'">Chat</button>
             </div>
             {% endif %}
 
             <!-- Players Tab -->
-            <div class="players-list" x-show="sideTab === 'players'">
-                {% for p in players %}
-                <div class="player-row {{ 'highlighted' if p.is_viewer else '' }} {{ 'eliminated' if p.eliminated else '' }}">
-                    <span class="player-rank" style="background:{{ p.name | name_color }}">{{ 'X' if p.eliminated else loop.index }}</span>
-                    <span class="player-row-name">{{ p.name }}</span>
-                    {% if p.highest_tier %}
-                    <span class="pip" data-tier="{{ p.highest_tier }}" title="{{ p.highest_tier | capitalize }}"></span>
-                    {% endif %}
-                    <span class="player-status {{ p.status_class }}">{{ p.status }}</span>
-                </div>
-                {% endfor %}
+            <div class="players-scroll" x-show="sideTab === 'players'">
+                <table role="grid">
+                    <tbody>
+                        {% for p in players %}
+                        <tr class="{{ 'highlighted' if p.is_viewer else '' }} {{ 'eliminated' if p.eliminated else '' }}"
+                            style="border-left:3px solid {{ p.name | name_color }}">
+                            <td><strong>{{ p.name }}</strong></td>
+                            {% if p.highest_tier %}
+                            <td><kbd data-tier="{{ p.highest_tier }}" style="font-size:0.7rem">{{ p.highest_tier | capitalize }}</kbd></td>
+                            {% endif %}
+                            <td style="text-align:right"><small>{{ p.status }}</small></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
 
             <!-- Chat Tab -->
             {% if mode not in ('local', 'solo') %}
-            <div class="chat-area" x-show="sideTab === 'chat'">
+            <div x-show="sideTab === 'chat'" class="chat-panel">
                 <div class="chat-messages" x-init="$el.scrollTop = $el.scrollHeight">
                     {% for msg in chat %}
-                    <div class="chat-msg {{ 'own' if msg.sid == viewer.id else '' }}">
-                        <strong>{{ msg.player }}:</strong> {{ msg.message }}
-                    </div>
+                    <p class="chat-msg"{{ ' style="color:var(--amber)"' if msg.sid == viewer.id else '' }}>
+                        <small><strong>{{ msg.player }}:</strong> {{ msg.message }}</small>
+                    </p>
                     {% endfor %}
                 </div>
-                <div class="chat-input-row">
-                    <input type="text" maxlength="150" placeholder="Message..."
+                <div role="group">
+                    <input type="text" maxlength="150" placeholder="Message..." style="margin:0"
                         x-model="chatMsg"
                         @keydown.enter.prevent="sendChat('{{ room.code }}')" />
                     <button class="small" @click="sendChat('{{ room.code }}')">Send</button>

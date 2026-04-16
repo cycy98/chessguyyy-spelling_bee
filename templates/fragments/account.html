@@ -1,13 +1,12 @@
 {# Account fragment #}
-<div class="account" data-elo="{{ player.elo | round(1) }}">
-    <div class="account-header bar">
+<div data-elo="{{ player.elo | round(1) }}">
+    <div class="section-header">
         <h2>{{ player.username }} | {{ player.elo | round(1) }} ELO</h2>
-        <div style="display:flex;gap:6px">
-            <button class="outline secondary" hx-get="leaderboard" hx-target="#leaderboard-area" hx-swap="innerHTML"
-                @htmx:after-request.window="navigated('leaderboard-area','leaderboard')($event)">
+        <div role="group">
+            <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">
                 Leaderboard
             </button>
-            <button class="outline secondary" @click="view = 'menu'">Main Menu</button>
+            <button class="outline secondary" hx-get="/" hx-target="#content" hx-swap="innerHTML">Main Menu</button>
         </div>
     </div>
 
@@ -20,59 +19,53 @@
     {% if badges or player.tiers_cleared %}
     <div class="badge-row">
         {% for name, icon in badges %}
-        <span class="badge">{{ icon }} {{ name }}</span>
+        <kbd>{{ icon }} {{ name }}</kbd>
         {% endfor %}
         {% if player.tiers_cleared %}
         {% for t in player.tiers_cleared.split(',') if t %}
-        <span class="badge" data-tier="{{ t }}">
-            {{ t | capitalize }}
-        </span>
+        <kbd data-tier="{{ t }}">{{ t | capitalize }}</kbd>
         {% endfor %}
         {% endif %}
     </div>
     {% endif %}
 
-    <div class="stat-cards">
-        <article class="stat-card">
-            <div class="stat-value">{{ player.games }}</div>
-            <div class="stat-label">Games Played</div>
-        </article>
-        <article class="stat-card">
-            <div class="stat-value">{{ player.words }}</div>
-            <div class="stat-label">Words Attempted</div>
-        </article>
-        <article class="stat-card">
-            <div class="stat-value">{{ ((player.wins / player.games * 100) if player.games > 0 else 0) | round(1) }}%</div>
-            <div class="stat-label">Win Rate</div>
-        </article>
-        <article class="stat-card">
-            <div class="stat-value">{{ ((player.correct / player.words * 100) if player.words > 0 else 0) | round(1) }}%</div>
-            <div class="stat-label">Correct Rate</div>
-        </article>
-        <article class="stat-card">
-            <div class="stat-value">{{ player.best_streak }}</div>
-            <div class="stat-label">Best Streak</div>
-        </article>
-        <article class="stat-card">
-            <div class="stat-value">{{ avg_wpm }}</div>
-            <div class="stat-label">Avg WPM (recent)</div>
-        </article>
-    </div>
-
     <article>
-        <table>
+        <table class="stats-table">
             <tbody>
-                <tr><td>Wins</td><td>{{ player.wins }}</td></tr>
-                <tr><td>Correct Words</td><td>{{ player.correct }}</td></tr>
-                <tr><td>Highest WPM</td><td>{{ player.best_wpm }}</td></tr>
-                <tr><td>Best WPM Word</td><td>{{ player.best_word or '—' }}</td></tr>
+                <tr><td><strong>Games Played</strong></td><td>{{ player.games }}</td></tr>
+                <tr><td><strong>Wins</strong></td><td>{{ player.wins }}{% if player.games > 0 %} <small>({{ ((player.wins / player.games * 100)) | round(1) }}%)</small>{% endif %}</td></tr>
+                <tr><td><strong>Words Attempted</strong></td><td>{{ player.words }}</td></tr>
+                <tr><td><strong>Correct Words</strong></td><td>{{ player.correct }}{% if player.words > 0 %} <small>({{ ((player.correct / player.words * 100)) | round(1) }}%)</small>{% endif %}</td></tr>
+                <tr><td><strong>Best Streak</strong></td><td>{{ player.best_streak }}</td></tr>
+                <tr><td><strong>Highest WPM</strong></td><td>{{ player.best_wpm }}{% if player.best_word %} <small>({{ player.best_word }})</small>{% endif %}</td></tr>
+                <tr><td><strong>Avg WPM (recent)</strong></td><td>{{ avg_wpm }}</td></tr>
             </tbody>
         </table>
     </article>
 
+    {% if practice %}
+    <h3>Words to Practice</h3>
+    <figure>
+        <table>
+            <thead>
+                <tr><th>Word</th><th>Times Missed</th><th>Definition</th></tr>
+            </thead>
+            <tbody>
+                {% for p in practice %}
+                <tr>
+                    <td>{{ p.word }}</td>
+                    <td>{{ p.n }}</td>
+                    <td><small>{{ p.definition or '—' }}</small></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </figure>
+    {% endif %}
+
     {% if recent %}
-    <h3 style="margin-top:24px">Recent Activity</h3>
-    <div style="overflow-x:auto">
+    <h3>Recent Activity</h3>
+    <figure>
         <table>
             <thead>
                 <tr><th>Word</th><th>Result</th><th>WPM</th><th>Tier</th><th>When</th></tr>
@@ -83,32 +76,12 @@
                     <td>{{ r.word }}</td>
                     <td>{% if r.correct %}<span class="correct">Correct</span>{% else %}<span class="missed">Missed</span>{% endif %}</td>
                     <td>{{ r.wpm | round(1) }}</td>
-                    <td><span class="pip" data-tier="{{ r.tier }}"></span> {{ r.tier | capitalize }}</td>
-                    <td class="muted">{{ r.ts | relative_time }}</td>
+                    <td>{{ r.tier | capitalize }}</td>
+                    <td><small>{{ r.ts | relative_time }}</small></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
-    </div>
-    {% endif %}
-
-    {% if practice %}
-    <h3 style="margin-top:24px">Words to Practice</h3>
-    <div style="overflow-x:auto">
-        <table>
-            <thead>
-                <tr><th>Word</th><th>Times Missed</th><th>Definition</th></tr>
-            </thead>
-            <tbody>
-                {% for p in practice %}
-                <tr>
-                    <td>{{ p.word }}</td>
-                    <td>{{ p.n }}</td>
-                    <td class="detail">{{ p.definition or '—' }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+    </figure>
     {% endif %}
 </div>

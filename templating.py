@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -11,9 +12,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from backend.auth import get_current_user
-from backend.game import DIFFICULTIES, ROOT, TIER_COLORS, TOTAL_WORDS, WORDS
 
-templates = Jinja2Templates(directory=str(ROOT / "templates"))
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.autoescape = True  # type: ignore[assignment]
 
 
@@ -38,18 +38,12 @@ def _relative_time(ts: float) -> str:
 
 templates.env.filters["relative_time"] = _relative_time
 
-templates.env.globals["tier_colors"] = TIER_COLORS
-
-
-def _catalog_ctx() -> dict[str, Any]:
-    return {
-        "difficulties": DIFFICULTIES,
-        "words": WORDS,
-        "total_words": TOTAL_WORDS,
-    }
-
 
 def client_ip(request: Request) -> str:
+    # We always run behind nginx
+    forwarded = request.headers.get("x-real-ip")
+    if forwarded:
+        return forwarded
     if request.client:
         return request.client.host
     return "unknown"

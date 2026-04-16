@@ -5,18 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Spelling Bee</title>
     <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.amber.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.amber.min.css"
+          integrity="sha384-BiacLKDCyG54e35iUPYB3xZg4mZ2my6tLgF44LKpomzgxexC+sAL7aL7f2mxTh7J" crossorigin="anonymous">
     <link rel="stylesheet" href="static/styles.css">
     <style>
     {% for tier, color in tier_colors.items() %}
     [data-tier="{{ tier }}"] { --tier-color: {{ color }}; }
     {% endfor %}
     </style>
-    <script src="https://unpkg.com/htmx.org@2.0.8"></script>
-    <script src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"></script>
-    <script src="https://unpkg.com/idiomorph@0.7.4/dist/idiomorph-ext.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leo-profanity@1.9.0/lib/leo-profanity.min.js" async></script>
-    <script defer src="https://unpkg.com/alpinejs@3.15.11/dist/cdn.min.js"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.8/dist/htmx.min.js"
+            integrity="sha384-/TgkGk7p307TH7EXJDuUlgG3Ce1UVolAOFopFekQkkXihi5u/6OCvVKyz1W+idaz" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"
+            integrity="sha384-QA9wXqexhwzXTuTvuF5QP82pddm3R2hy81UzXi7ioNTqNF2b75hlkkSGjafohhL3" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/idiomorph@0.7.4/dist/idiomorph-ext.min.js"
+            integrity="sha384-SsScJKzATF/w6suEEdLbgYGsYFLzeKfOA6PY+/C5ZPxOSuA+ARquqtz/BZz9JWU8" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/leo-profanity@1.9.0/src/index.js"
+            integrity="sha384-K739sy+lfaRbDbvyilsFMTguywMXHMt9c/SUU4oAQ35RmjUDh9u88x4F49hDU2ZA" crossorigin="anonymous" async></script>
+    <script defer src="https://unpkg.com/alpinejs@3.15.11/dist/cdn.min.js"
+            integrity="sha384-WPtu0YHhJ3arcykfnv1JgUffWDSKRnqnDeTpJUbOc2os2moEmLkIdaeR0trPN4be" crossorigin="anonymous"></script>
 </head>
 <body>
     <div x-data="spellingBee()" class="app" hx-ext="morph">
@@ -54,7 +60,7 @@
         if (!e.detail.requestConfig?.path?.includes('guess')) return;
         const board = document.querySelector('.board-wrapper');
         if (!board) return;
-        const cls = document.querySelector('.feedback-card')?.classList.contains('success')
+        const cls = board.dataset.feedback === 'success'
             ? 'board-correct' : 'board-incorrect';
         board.classList.remove('board-correct', 'board-incorrect');
         board.classList.add(cls);
@@ -63,17 +69,17 @@
 
     function spellingBee() {
         return {
-            view: 'menu',
-            mode: null,
             roomCode: null,
-            playerName: '',
+            playerName: localStorage.getItem('sbPlayerName') || '',
             difficulty: '{{ difficulties[0] }}',
             roomCodeInput: '',
             localPlayers: ['', ''],
             audioObj: null,
             audioPlayedUrl: '',
             lastWordKey: '',
+            audioEndedAt: 0,
             inputLocked: false,
+            autoplayBlocked: false,
             nameTracksLogin: true,
             loggedInUser: '',
 
@@ -81,37 +87,28 @@
             muted: false,
             profanityError: '',
 
-            // Persisted across room updates (room.html swaps via SSE-triggered GET,
+            // Persisted across room updates (room state morphs via SSE,
             // which would wipe these if they lived in room.html's local x-data)
             guessText: '',
             chatMsg: '',
             sideTab: 'players',
 
             init() {
-                const v = document.getElementById('logged-in-username')?.value;
-                this.loggedInUser = v || '';
-                if (v && this.nameTracksLogin) this.playerName = v;
-                // Reconnect to active room on page refresh
-                const rc = document.getElementById('reconnect-room');
-                if (rc) {
-                    this.roomCode = rc.value;
-                    this.mode = rc.dataset.mode;
-                    this.view = 'game';
-                    htmx.ajax('GET', `room/${rc.value}`, {target: '#game-area', swap: 'innerHTML'});
-                }
                 window.addEventListener('beforeunload', () => {
                     if (this.roomCode) navigator.sendBeacon('forfeit');
                 });
-            },
-
-            navigated(targetId, newView, newMode) {
-                return (event) => {
-                    if (!event.detail.successful || event.detail.target?.id !== targetId) return;
-                    const el = document.querySelector('[data-room-code]');
-                    if (el) this.roomCode = el.dataset.roomCode;
-                    if (newMode) this.mode = newMode;
-                    this.view = newView;
-                };
+                window.addEventListener('htmx:sseError', async () => {
+                    if (!this.roomCode) return;
+                    try {
+                        const r = await fetch(`room/${this.roomCode}`);
+                        if (r.status === 403) this.mainMenu();
+                    } catch (_) {}
+                });
+                window.addEventListener('auth-changed', (e) => {
+                    this.loggedInUser = e.detail?.user || '';
+                    if (e.detail?.user && this.nameTracksLogin) this.playerName = e.detail.user;
+                });
+                this.$watch('playerName', (val) => localStorage.setItem('sbPlayerName', val));
             },
 
             addLocalPlayer() {
@@ -134,21 +131,32 @@
                 this.audioPlayedUrl = url;
                 this.audioObj = new Audio(url);
                 this.audioObj.volume = this.muted ? 0 : this.volume;
+                const markEnded = () => {
+                    if (!this.audioEndedAt) this.audioEndedAt = performance.now();
+                };
                 if (lock) {
                     this.inputLocked = true;
                     let unlocked = false;
                     const unlock = () => {
-                        if (!unlocked) { unlocked = true; this.inputLocked = false; }
+                        if (!unlocked) { unlocked = true; markEnded(); this.inputLocked = false; }
                     };
                     this.audioObj.addEventListener('ended', unlock);
                     this.audioObj.addEventListener('error', unlock);
                     const fallback = duration ? (duration * 1000) + 500 : 5000;
                     setTimeout(unlock, fallback);
+                } else {
+                    this.audioObj.addEventListener('ended', markEnded);
+                    this.audioObj.addEventListener('error', markEnded);
                 }
-                this.audioObj.play().catch(() => { this.inputLocked = false; });
+                this.audioObj.play().catch(() => {
+                    this.inputLocked = false;
+                    this.autoplayBlocked = true;
+                    markEnded();
+                });
             },
 
             replayAudio() {
+                this.autoplayBlocked = false;
                 const url = document.querySelector('[data-audio-url]');
                 if (url && url.dataset.audioUrl) {
                     this.playAudio(url.dataset.audioUrl, false, 0);
@@ -159,10 +167,16 @@
                 if (this.inputLocked) return;
                 this.inputLocked = true;
                 this.guessText = '';
+                if (!this.audioEndedAt) this.audioEndedAt = performance.now();
+                const typingMs = Math.max(0, Math.round(performance.now() - this.audioEndedAt));
                 htmx.ajax('POST', 'guess', {
-                    target: '#game-area',
-                    swap: 'innerHTML',
-                    values: { guess: (text || '').replace(/[^A-Za-z]/g, '') }
+                    target: '#room-state',
+                    swap: 'morph:outerHTML',
+                    select: '#room-state',
+                    values: {
+                        guess: (text || '').replace(/[^A-Za-z]/g, ''),
+                        typing_ms: typingMs,
+                    }
                 });
             },
 
@@ -181,8 +195,7 @@
                     navigator.sendBeacon('forfeit');
                 }
                 this.roomCode = null;
-                this.mode = null;
-                this.view = 'menu';
+                htmx.ajax('GET', '/', {target: '#content', swap: 'innerHTML'});
             },
 
             hasProfanity(text) {

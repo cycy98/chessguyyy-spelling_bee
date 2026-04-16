@@ -6,15 +6,11 @@ import json
 import math
 import re
 import secrets
-import string
 import time
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
 # ── Domain types ──
 
@@ -60,7 +56,8 @@ MAX_CHAT = 80
 MAX_CHAT_LEN = 150
 MAX_WORD_LEN = 50
 STALE_MINUTES = 30
-NETWORK_GRACE = 1.5  # seconds added to deadline for network + render latency (audio accounted separately)
+NETWORK_GRACE = 1.5  # seconds of submit-POST cushion on the deadline — absorbs round-trip latency after visible timer expires
+MAX_CHARS_PER_SEC = 12  # physics floor for typing speed — bounds client-reported typing_ms
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
@@ -76,35 +73,62 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
 
 # ── Word catalog ──
 
-with Path(ROOT / "wordlist.json").open() as _f:
-    _raw_catalog: dict[str, Any] = json.load(_f)
 
-TIER_COLORS: dict[str, str] = _raw_catalog["info"]["color"]
-DIFFICULTIES: list[str] = [k for k in _raw_catalog if k != "info"]
-WORDS: dict[str, dict[str, dict[str, Any]]] = {d: _raw_catalog[d] for d in DIFFICULTIES}
-TOTAL_WORDS = sum(len(v) for v in WORDS.values())
+@dataclass
+class Catalog:
+    tier_colors: dict[str, str]
+    words: dict[str, dict[str, dict[str, Any]]]
+    audio_durations: dict[str, float]
+    difficulties: list[str] = field(init=False, repr=False)
+    total_words: int = field(init=False, repr=False)
+    all_words: dict[str, dict[str, Any]] = field(init=False, repr=False)
+    _word_keys: dict[str, list[str]] = field(init=False, repr=False)
+    _all_word_keys: list[str] = field(init=False, repr=False)
 
-ALL_WORDS: dict[str, dict[str, Any]] = {
-    w: {**wdata, "tier": tier} for tier, wdict in WORDS.items() for w, wdata in wdict.items()
-}
+    def __post_init__(self) -> None:
+        self.difficulties = list(self.words)
+        self.total_words = sum(len(v) for v in self.words.values())
+        self.all_words = {
+            w: {**wdata, "tier": tier}
+            for tier, wdict in self.words.items()
+            for w, wdata in wdict.items()
+        }
+        self._word_keys = {d: list(ws) for d, ws in self.words.items()}
+        self._all_word_keys = list(self.all_words)
 
-_WORD_KEYS: dict[str, list[str]] = {d: list(ws) for d, ws in WORDS.items()}
-_ALL_WORD_KEYS: list[str] = list(ALL_WORDS)
+    @classmethod
+    def load(cls, root: Path) -> "Catalog":
+        with (root / "wordlist.json").open() as f:
+            raw: dict[str, Any] = json.load(f)
+        return cls(
+            tier_colors=raw["info"]["color"],
+            words={k: v for k, v in raw.items() if k != "info"},
+            audio_durations=_load_audio_durations(root),
+        )
+
+    def pick_word(self, difficulty: str) -> WordEntry:
+        if difficulty == "randomizer":
+            word_str = secrets.choice(self._all_word_keys)
+            return cast(WordEntry, {"word": word_str, **self.all_words[word_str]})
+        keys = self._word_keys.get(difficulty, self._word_keys[self.difficulties[0]])
+        pool = self.words.get(difficulty, self.words[self.difficulties[0]])
+        word_str = secrets.choice(keys)
+        return cast(WordEntry, {"word": word_str, **pool[word_str], "tier": difficulty})
+
+    def has_audio(self, word: str) -> bool:
+        return word.lower() in self.audio_durations
+
+    def validate_difficulty(self, raw: str) -> str:
+        if raw in self.difficulties or raw == "randomizer":
+            return raw
+        return self.difficulties[0]
+
+    def template_ctx(self) -> dict[str, Any]:
+        return {"difficulties": self.difficulties, "words": self.words, "total_words": self.total_words}
 
 
-def pick_word(difficulty: str) -> WordEntry:
-    if difficulty == "randomizer":
-        word_str = secrets.choice(_ALL_WORD_KEYS)
-        return cast(WordEntry, {"word": word_str, **ALL_WORDS[word_str]})
-    keys = _WORD_KEYS.get(difficulty, _WORD_KEYS[DIFFICULTIES[0]])
-    pool = WORDS.get(difficulty, WORDS[DIFFICULTIES[0]])
-    word_str = secrets.choice(keys)
-    return cast(WordEntry, {"word": word_str, **pool[word_str], "tier": difficulty})
-
-
-def _load_audio_durations() -> dict[str, float]:
-    """Pre-scan audios/ for MP3 durations. Uses mutagen if available, else estimates from file size."""
-    audios_dir = ROOT / "audios"
+def _load_audio_durations(root: Path) -> dict[str, float]:
+    audios_dir = root / "audios"
     if not audios_dir.is_dir():
         return {}
     durations: dict[str, float] = {}
@@ -120,13 +144,6 @@ def _load_audio_durations() -> dict[str, float]:
         for p in audios_dir.glob("*.mp3"):
             durations[p.stem.lower()] = len(p.stem) * 0.12 + 0.5
     return durations
-
-
-AUDIO_DURATIONS: dict[str, float] = _load_audio_durations()
-
-
-def has_audio(word: str) -> bool:
-    return word.lower() in AUDIO_DURATIONS
 
 
 # ── In-memory state ──
@@ -178,15 +195,16 @@ class Room:
     last_activity: float = field(default_factory=time.time)
     current_word: WordEntry | None = None
     word_served_at: float = 0.0
-    # Callbacks — injected at construction; all default None so Room is
-    # fully usable in tests / local mode without a GameState.
-    on_change: Callable[[str], None] | None = field(default=None, repr=False)
-    resolve_session: Callable[[str], Session | None] | None = field(default=None, repr=False)
+    word_audio_duration: float = 0.0
+    # Injected at construction; defaults to empty/None so Room is usable in tests.
+    sessions_map: dict[str, Session] = field(default_factory=dict, repr=False)
+    catalog: "Catalog | None" = field(default=None, repr=False)
 
     # --- State-transition methods ---
 
     def serve_new_word(self, streak: int = 0) -> None:
-        word_data = pick_word(self.difficulty)
+        assert self.catalog is not None, "Room.catalog must be injected before serving words"
+        word_data = self.catalog.pick_word(self.difficulty)
         self.current_word = word_data
         self.word_served_at = time.time()
         self.draft_text = ""
@@ -194,8 +212,8 @@ class Room:
         is_solo = self.visibility == "solo"
         tl = compute_time_limit(word_str, streak=streak, multiplayer=not is_solo)
         self.turn_time_limit = tl
-        audio_dur = AUDIO_DURATIONS.get(word_str.lower(), 0.0)
-        self.turn_deadline = time.time() + tl + audio_dur + NETWORK_GRACE
+        self.word_audio_duration = self.catalog.audio_durations.get(word_str.lower(), 0.0)
+        self.turn_deadline = time.time() + tl + self.word_audio_duration + NETWORK_GRACE
 
     def check_timeout(self) -> list[Ranking] | None:
         """Check and handle timeout. Returns rankings if game ended."""
@@ -208,7 +226,7 @@ class Room:
         active_sid = active_session_id(self)
         if not active_sid:
             return None
-        sess = self.resolve_session(active_sid) if self.resolve_session else None
+        sess = self.sessions_map.get(active_sid)
         if sess:
             sess.last_feedback = feedback("Time's up", "Counted as a skip.")
         self.eliminated.add(active_sid)
@@ -230,11 +248,7 @@ class Room:
     def finish_game(self) -> list[Ranking]:
         alive = alive_sessions(self)
         winner_sid = alive[0] if alive else None
-        winner_sess = (
-            (self.resolve_session(winner_sid) if self.resolve_session else None)
-            if winner_sid
-            else None
-        )
+        winner_sess = self.sessions_map.get(winner_sid) if winner_sid else None
         self.winner = winner_sess.player_name if winner_sess else "Nobody"
         self.turn_deadline = 0
         self.draft_text = ""
@@ -242,7 +256,7 @@ class Room:
         rankings: list[Ranking] = []
         elim_order = [s for s in self.sessions if s in self.eliminated]
         for rank_idx, sid in enumerate(reversed(elim_order)):
-            s = self.resolve_session(sid) if self.resolve_session else None
+            s = self.sessions_map.get(sid)
             if s:
                 rankings.append(
                     Ranking(
@@ -282,38 +296,25 @@ class Room:
         self.turn_index = 0
         self.draft_text = ""
         for sid in self.sessions:
-            s = self.resolve_session(sid) if self.resolve_session else None
+            s = self.sessions_map.get(sid)
             if s:
                 s.last_feedback = None
         self.serve_new_word()
         self.last_activity = time.time()
-        self._notify()
-
-    def _notify(self) -> None:
-        if self.on_change:
-            self.on_change(self.code)
 
     def tick(self) -> list[Ranking] | None:
         """Check timeout and intermission. Returns rankings if a game ended."""
         rankings = self.check_timeout()
         if self.intermission_until and time.time() >= self.intermission_until and self.winner:
-            self.start_new_game()  # calls _notify
-            return rankings
-        if rankings is not None:
-            self._notify()
+            self.start_new_game()
         return rankings
 
-    def begin_game(self) -> None:
-        """Called when enough players join to start."""
-        self.serve_new_word()
-        self._notify()
-
-    def notify_or_begin(self) -> None:
-        """Notify SSE subscribers, or start the game if this is the second player."""
+    def begin_if_ready(self) -> bool:
+        """Start the game if this is the second player. Returns True if game started."""
         if len(self.sessions) == 2 and not self.current_word:
-            self.begin_game()
-        else:
-            self._notify()
+            self.serve_new_word()
+            return True
+        return False
 
     def set_draft(self, text: str) -> None:
         self.draft_text = text
@@ -322,11 +323,9 @@ class Room:
     def add_chat(self, entry: dict[str, str]) -> None:
         self.chat.append(entry)
         self.last_activity = time.time()
-        self._notify()
 
     def toggle_lock(self) -> None:
         self.locked = not self.locked
-        self._notify()
 
     def _apply_to_session(self, sess: Session, result: GuessResult, is_solo: bool) -> None:
         """Update session stats and set last_feedback from a GuessResult."""
@@ -334,11 +333,12 @@ class Room:
             sess.words_correct += 1
             if is_solo:
                 sess.streak += 1
-            if sess.account_username:
+            if sess.account_username and self.catalog:
                 t = result.tier
-                if t in DIFFICULTIES and (
+                diffs = self.catalog.difficulties
+                if t in diffs and (
                     not sess.highest_tier
-                    or DIFFICULTIES.index(t) > DIFFICULTIES.index(sess.highest_tier)
+                    or diffs.index(t) > diffs.index(sess.highest_tier)
                 ):
                     sess.highest_tier = t
             body = f"{result.wpm} WPM."
@@ -366,13 +366,16 @@ class Room:
         self,
         sess: Session,
         guess_text: str,
+        typing_ms: int | None = None,
     ) -> tuple[GuessResult | None, list[Ranking] | None]:
         """Evaluate a guess and update game state. Returns (result, rankings_if_game_ended)."""
         word_data = self.current_word
         if not word_data:
             return None, None
 
-        elapsed = time.time() - self.word_served_at
+        elapsed = typing_window_s(
+            typing_ms, guess_text, self.word_served_at, self.word_audio_duration,
+        )
         is_solo = self.visibility == "solo"
 
         if self.turn_deadline > 0 and time.time() > self.turn_deadline:
@@ -407,7 +410,6 @@ class Room:
         else:
             rankings = self.advance_turn(eliminated=False)
 
-        self._notify()
         return result, rankings
 
     def forfeit(self, sid: str) -> list[Ranking] | None:
@@ -431,8 +433,18 @@ class Room:
             # Forfeiter was waiting — keep the same active player
             self.turn_index = alive.index(prev_active)
         self.last_activity = time.time()
-        self._notify()
         return rankings
+
+    def player_status(self, sid: str) -> tuple[str, str]:
+        if self.winner:
+            for mr in self.last_match_results:
+                if mr["sid"] == sid:
+                    return f"Rank {mr['rank']}", "winner" if mr["rank"] == 1 else "eliminated"
+        elif sid in self.eliminated:
+            return "Eliminated", "eliminated"
+        elif sid == active_session_id(self):
+            return "Spelling", "spelling"
+        return "Waiting", "waiting"
 
 
 # ── Pure helpers ──
@@ -451,12 +463,6 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9 '_-]")
 
 def clean_name(raw: str, fallback: str = "Player") -> str:
     return _NAME_RE.sub("", raw).strip()[:24] or fallback
-
-
-def validate_difficulty(raw: str) -> str:
-    if raw in DIFFICULTIES or raw == "randomizer":
-        return raw
-    return DIFFICULTIES[0]
 
 
 def alive_sessions(room: Room) -> list[str]:
@@ -483,6 +489,17 @@ def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) ->
     chars = max(len(word) / 5, 0.2)
     wpm_required = 10.0 if multiplayer else 5 * streak**0.8 + 10
     return max(3.0, (chars / wpm_required) * 60)
+
+
+def typing_window_s(
+    typing_ms: int | None, guess: str, served_at: float, audio_duration: float,
+) -> float:
+    """Typing window in seconds. Trusts client-reported ms above a physics floor;
+    falls back to server elapsed (minus audio) when the client doesn't report."""
+    floor = max(len(guess), 1) / MAX_CHARS_PER_SEC
+    if typing_ms is not None:
+        return max(typing_ms / 1000, floor)
+    return max(time.time() - served_at - audio_duration, floor)
 
 
 def compute_wpm(guess: str, elapsed: float) -> float:
@@ -517,84 +534,3 @@ def update_elo(players: list[dict[str, Any]], k: float = 32.0) -> None:
         p["elo"] += k * ((n - p["rank"]) / norm - _exp(p["elo"]) / denom)
 
 
-# ── GameState (pure — no asyncio, no IO) ──
-
-
-@dataclass
-class GameState:
-    sessions: dict[str, Session] = field(default_factory=dict)
-    rooms: dict[str, Room] = field(default_factory=dict)
-    rate_buckets: dict[str, dict[str, list[float]]] = field(
-        default_factory=lambda: defaultdict(lambda: defaultdict(list)),
-    )
-
-    def make_room_code(self) -> str:
-        chars = string.ascii_uppercase + string.digits
-        while True:
-            code = "".join(secrets.choice(chars) for _ in range(6))
-            if code not in self.rooms:
-                return code
-
-    def check_rate(self, ip: str, action: str) -> bool:
-        limit, window = RATE_LIMITS[action]
-        now = time.time()
-        bucket = self.rate_buckets[ip][action]
-        bucket[:] = [t for t in bucket if now - t < window]
-        if len(bucket) >= limit:
-            return False
-        bucket.append(now)
-        return True
-
-    def count_sessions_for_ip(self, ip: str) -> int:
-        return sum(1 for s in self.sessions.values() if s.ip == ip)
-
-    def purge_stale(self) -> tuple[list[str], list[str]]:
-        """Remove stale rooms/sessions/rate buckets. Returns (purged_room_codes, purged_sids)."""
-        cutoff = time.time() - STALE_MINUTES * 60
-        stale_rooms = [c for c, r in self.rooms.items() if r.last_activity < cutoff]
-        purged_sids: list[str] = []
-        for c in stale_rooms:
-            for sid in self.rooms[c].sessions:
-                self.sessions.pop(sid, None)
-                purged_sids.append(sid)
-            del self.rooms[c]
-        stale_sessions = [
-            s
-            for s, sess in self.sessions.items()
-            if (sess.room_code and sess.room_code not in self.rooms) or sess.last_activity < cutoff
-        ]
-        for s in stale_sessions:
-            self.sessions.pop(s, None)
-        stale_ips = [
-            ip
-            for ip, actions in self.rate_buckets.items()
-            if all(not ts for ts in actions.values())
-        ]
-        for ip in stale_ips:
-            del self.rate_buckets[ip]
-        return stale_rooms, purged_sids
-
-    def add_player_to_room(
-        self,
-        room: Room,
-        player_name: str,
-        difficulty: str,
-        ip: str,
-        account: str | None = None,
-        highest_tier: str = "",
-    ) -> Session:
-        sid = make_session_id()
-        sess = Session(
-            id=sid,
-            player_name=player_name,
-            difficulty=difficulty,
-            room_code=room.code,
-            account_username=account,
-            ip=ip,
-        )
-        if highest_tier:
-            sess.highest_tier = highest_tier
-        self.sessions[sid] = sess
-        room.sessions.append(sid)
-        room.last_activity = time.time()
-        return sess

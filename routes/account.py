@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse
 
 from backend import db
 from backend.auth import get_current_user
-from backend.game import ALL_WORDS
 from templating import tpl
 
 router = APIRouter()
@@ -24,7 +23,7 @@ async def leaderboard(request: Request) -> HTMLResponse:
     return await tpl(request, "fragments/leaderboard.html", {"players": rows})
 
 
-async def _account_ctx(row: db.Row) -> dict[str, Any]:
+async def _account_ctx(row: db.Row, all_words: dict[str, Any]) -> dict[str, Any]:
     username = row["username"]
     recent = await db.fetchall(
         "SELECT word, correct, wpm, tier, ts FROM guess_log "
@@ -40,7 +39,7 @@ async def _account_ctx(row: db.Row) -> dict[str, Any]:
         {
             "word": r["word"],
             "n": r["n"],
-            "definition": ALL_WORDS.get(r["word"], {}).get("definition", ""),
+            "definition": all_words.get(r["word"], {}).get("definition", ""),
         }
         for r in practice
     ]
@@ -62,10 +61,11 @@ async def account_view(request: Request, username: str) -> HTMLResponse:
     row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
     if not row:
         return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
+    all_words = request.app.state.srv.catalog.all_words
     return await tpl(
         request,
         "fragments/account.html",
-        {"player": row, **(await _account_ctx(row))},
+        {"player": row, **(await _account_ctx(row, all_words))},
     )
 
 
@@ -77,8 +77,9 @@ async def own_account(request: Request) -> HTMLResponse:
     row = await db.fetchone("SELECT * FROM users WHERE username = ?", (user,))
     if not row:
         return HTMLResponse("<p class='feedback error'>Player not found.</p>", status_code=404)
+    all_words = request.app.state.srv.catalog.all_words
     return await tpl(
         request,
         "fragments/account.html",
-        {"player": row, **(await _account_ctx(row))},
+        {"player": row, **(await _account_ctx(row, all_words))},
     )

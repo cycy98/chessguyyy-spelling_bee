@@ -6,7 +6,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from backend import db
-from backend.game import DIFFICULTIES, Ranking, Room, update_elo
+from backend.game import Ranking, Room, update_elo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,12 +19,12 @@ async def is_name_reserved(player_name: str, account_username: str | None) -> bo
     return await db.fetchone("SELECT 1 FROM users WHERE username = ?", (player_name,)) is not None
 
 
-async def load_highest_tier(username: str) -> str:
+async def load_highest_tier(username: str, difficulties: list[str]) -> str:
     row = await db.fetchone("SELECT tiers_cleared FROM users WHERE username=?", (username,))
     if not row or not row["tiers_cleared"]:
         return ""
-    tiers = [t for t in row["tiers_cleared"].split(",") if t in DIFFICULTIES]
-    return max(tiers, key=DIFFICULTIES.index) if tiers else ""
+    tiers = [t for t in row["tiers_cleared"].split(",") if t in difficulties]
+    return max(tiers, key=difficulties.index) if tiers else ""
 
 
 async def record_guess_stats(

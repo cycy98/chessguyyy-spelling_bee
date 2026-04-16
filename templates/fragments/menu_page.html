@@ -1,0 +1,119 @@
+{# Main menu page — the entry screen. Rendered standalone via HX-Request, or inside index.html on full load. #}
+<h1 class="text-center">Spelling Bee</h1>
+
+{# Auth Section #}
+{% include "fragments/menu.html" %}
+
+{% if reconnect_code %}
+<article>
+    <div class="section-header">
+        <strong class="amber">You're still in room {{ reconnect_code }}.</strong>
+        <button class="secondary small"
+            @click="roomCode = '{{ reconnect_code }}'"
+            hx-get="room/{{ reconnect_code }}" hx-target="#content" hx-swap="innerHTML">
+            Rejoin
+        </button>
+    </div>
+</article>
+{% endif %}
+
+{# Player Name #}
+<label for="player-name">Player Name</label>
+<input type="text" id="player-name" maxlength="24" placeholder="Player One"
+    x-model="playerName"
+    @input="playerName = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9 '_-]/g, ''); nameTracksLogin = false; profanityError = ''" />
+<p class="error" x-show="profanityError" x-text="profanityError" x-cloak></p>
+
+{# Difficulty Picker #}
+<label for="difficulty">Difficulty</label>
+<select id="difficulty" x-model="difficulty">
+    {% for d in difficulties %}
+    <option value="{{ d }}">{{ d | capitalize }} ({{ words[d] | length }} words)</option>
+    {% endfor %}
+    <option value="randomizer">Randomizer ({{ total_words }} words)</option>
+</select>
+
+{# Room Code #}
+<label for="room-code">Room Code</label>
+<input type="text" id="room-code" maxlength="6" placeholder="Leave empty to create"
+    x-model="roomCodeInput"
+    @input="roomCodeInput = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase()" />
+
+{# Action Buttons #}
+<div role="group" style="margin-bottom:20px">
+    <button
+        hx-post="room/create" hx-target="#content" hx-swap="innerHTML"
+        :hx-vals="JSON.stringify({difficulty: difficulty, player_name: playerName || 'Player', visibility: 'solo'})">
+        Solo
+    </button>
+
+    <button class="secondary"
+        x-show="!roomCodeInput"
+        hx-post="room/create" hx-target="#content" hx-swap="innerHTML"
+        :hx-vals="JSON.stringify({difficulty: difficulty, player_name: playerName})">
+        Create Lobby
+    </button>
+
+    <button class="secondary"
+        x-show="roomCodeInput.length > 0"
+        hx-post="room/join" hx-target="#content" hx-swap="innerHTML"
+        :hx-vals="JSON.stringify({room_code: roomCodeInput, player_name: playerName})">
+        Join Lobby
+    </button>
+
+    <button class="secondary"
+        :disabled="!loggedInUser"
+        hx-post="public/join" hx-target="#content" hx-swap="innerHTML"
+        :hx-vals="JSON.stringify({difficulty: difficulty})">
+        Public Arena
+    </button>
+</div>
+
+{% if active_games %}
+<p class="text-center" style="margin-bottom:16px">
+    <small>{{ total_active_players }} player{{ 's' if total_active_players != 1 else '' }} in
+    {{ active_games | length }} public game{{ 's' if active_games | length != 1 else '' }}:
+    {% for g in active_games %}
+    <kbd data-tier="{{ g.difficulty }}" style="font-size:0.75rem">{{ g.difficulty | capitalize }} ({{ g.players }})</kbd>
+    {% endfor %}
+    </small>
+</p>
+{% endif %}
+
+{# Local Multiplayer #}
+<details>
+    <summary role="button" class="outline secondary">Local Multiplayer</summary>
+    <article>
+        <div role="group" style="justify-content:center;margin-bottom:12px">
+            <button class="outline secondary small" @click="removeLocalPlayer()" :disabled="localPlayers.length <= 2">−</button>
+            <span x-text="localPlayers.length + ' players'" style="padding:6px 12px"></span>
+            <button class="outline secondary small" @click="addLocalPlayer()" :disabled="localPlayers.length >= 12">+</button>
+        </div>
+        <div class="grid" style="margin-bottom:12px">
+            <template x-for="(p, i) in localPlayers" :key="i">
+                <input type="text" maxlength="24"
+                    :placeholder="'Player ' + (i + 1)"
+                    x-model="localPlayers[i]"
+                    @input="localPlayers[i] = $event.target.value = $event.target.value.replace(/[^A-Za-z0-9 '_-]/g, '')" />
+            </template>
+        </div>
+        <button
+            hx-post="room/create" hx-target="#content" hx-swap="innerHTML"
+            :hx-vals="JSON.stringify({difficulty: difficulty, players: JSON.stringify(localPlayers), visibility: 'local'})">
+            Start Elimination
+        </button>
+    </article>
+</details>
+
+{# Nav Links #}
+<div role="group" style="margin-bottom:16px">
+    <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">
+        Leaderboard
+    </button>
+    <button class="outline secondary" x-show="loggedInUser"
+        hx-get="account" hx-target="#content" hx-swap="innerHTML">
+        My Profile
+    </button>
+</div>
+
+<p class="text-center"><small>{{ total_words }} words across {{ difficulties | length }} difficulties.</small></p>

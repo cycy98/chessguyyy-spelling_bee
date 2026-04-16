@@ -1,6 +1,8 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[codz]
-*$py.class
+*pyc
+*db
+*md
+*sh
+audios/
 
-spellingbee.db*
+.idea/

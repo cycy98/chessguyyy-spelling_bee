@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from fastapi import APIRouter, Request
@@ -19,7 +20,7 @@ router = APIRouter()
 async def register(request: Request) -> HTMLResponse:
     state = request.app.state.srv
     ip = client_ip(request)
-    if not state.game.check_rate(ip, "register"):
+    if not state.check_rate(ip, "register"):
         raise HtmxError("Too many attempts. Try again later.", 429)
 
     form = await request.form()
@@ -47,6 +48,7 @@ async def register(request: Request) -> HTMLResponse:
 
     resp = await tpl(request, "fragments/menu.html", {"user": username, "elo": 1000.0})
     set_auth_cookie(resp, username)
+    resp.headers["HX-Trigger"] = json.dumps({"auth-changed": {"user": username}})
     return resp
 
 
@@ -54,7 +56,7 @@ async def register(request: Request) -> HTMLResponse:
 async def login(request: Request) -> HTMLResponse:
     state = request.app.state.srv
     ip = client_ip(request)
-    if not state.game.check_rate(ip, "login"):
+    if not state.check_rate(ip, "login"):
         raise HtmxError("Too many attempts. Try again later.", 429)
 
     form = await request.form()
@@ -72,6 +74,7 @@ async def login(request: Request) -> HTMLResponse:
 
     resp = await tpl(request, "fragments/menu.html", {"user": row["username"], "elo": row["elo"]})
     set_auth_cookie(resp, row["username"])
+    resp.headers["HX-Trigger"] = json.dumps({"auth-changed": {"user": row["username"]}})
     return resp
 
 
@@ -79,4 +82,5 @@ async def login(request: Request) -> HTMLResponse:
 async def logout(request: Request) -> HTMLResponse:
     resp = await tpl(request, "fragments/menu.html", {"user": None})
     resp.delete_cookie("auth", path="/")
+    resp.headers["HX-Trigger"] = json.dumps({"auth-changed": {"user": None}})
     return resp
