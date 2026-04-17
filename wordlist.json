@@ -523,7 +523,7 @@
         "hexakosioihexekontahexaphobia": {"part_of_speech": "noun", "definition": "an intense fear or avoidance associated with the number 666", "homophones": []},
         "hexanitrohexaazaisowurtzitane": {"part_of_speech": "noun", "definition": "a synthetic high-energy explosive compound known for extreme detonation power", "homophones": []},
         "hippopotomonstrosesquipedaliophobia": {"part_of_speech": "noun", "definition": "an anxiety related to encountering or using very long words", "homophones": ["hippopotomonstrosesquippedaliophobia"]},
-        "honorificabilitudinitatibus": {"part_of_speech": "noun", "definition": "the condition of being worthy of receiving honors", "homophones": []},
+        "honorificabilitudinitatibus": {"part_of_speech": "noun", "definition": "the condition of being worthy of receiving honors", "homophones": ["honourificabilitudinitatibus"]},
         "hydrochlorofluorocarbon": {"part_of_speech": "noun", "definition": "any inert compound of H, Cl, F and C used in place of CFCs", "homophones": []},
         "hypothalamoadenohypophysial": {"part_of_speech": "adjective", "definition": "relating to the hypothalamus and the anterior pituitary gland", "homophones": ["hypothalamoadenohypophyseal"]},
         "laryngotracheobronchitis": {"part_of_speech": "noun", "definition": "a respiratory illness causing swelling and obstruction in the upper airways", "homophones": []},
@@ -539,7 +539,7 @@
         "supercalifragilisticexpialidocious": {"part_of_speech": "adjective", "definition": "wonderful", "homophones": []},
         "thermoanaerobacterthermohydrosulfuricus": {"part_of_speech": "noun", "definition": "a bacterium which can thrive in high-temperature environments", "homophones": ["thermoanaerobacter thermohydrosulfuricus"]},
         "thermoelectromagnetoelastic": {"part_of_speech": "adjective", "definition": "involving coupled thermal, field-driven, and mechanical deformation effects", "homophones": []},
-        "thyroparathyroidectomized": {"part_of_speech": "adjective", "definition": "having undergone surgical removal of certain neck glands involved in hormone regulation", "homophones": []}
+        "thyroparathyroidectomized": {"part_of_speech": "adjective", "definition": "having undergone surgical removal of certain neck glands involved in hormone regulation", "homophones": ["thyroparathyroidectomised"]}
     },
     "info": {
         "color": {"starter": "#00ff00", "easy": "#00ffff", "tricky": "#ffff00", "advanced": "#ff0000", "insane": "#ff00ff", "expert": "#ff8f00", "master": "#333333", "sesquipedalian": "#ffffff"}
