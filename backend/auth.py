@@ -83,11 +83,17 @@ def set_auth_cookie(response: Response, username: str) -> None:
     # SameSite=Lax blocks cross-origin POSTs, which is sufficient CSRF protection
     # for these endpoints — no additional CSRF tokens are needed.
     response.set_cookie(
-        "auth", make_token(username), max_age=COOKIE_MAX_AGE, **_session_cookie_kwargs(),
+        "auth",
+        make_token(username),
+        max_age=COOKIE_MAX_AGE,
+        **_session_cookie_kwargs(),
     )
 
 
 def set_session_cookie(response: Response, session_id: str) -> None:
     response.set_cookie(
-        "session_id", session_id, max_age=COOKIE_MAX_AGE, **_session_cookie_kwargs(),
+        "session_id",
+        session_id,
+        max_age=COOKIE_MAX_AGE,
+        **_session_cookie_kwargs(),
     )

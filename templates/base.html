@@ -27,6 +27,16 @@
 <body>
     <div x-data="spellingBee()" class="app" hx-ext="morph">
         {% block content %}{% endblock %}
+        <div x-cloak
+             x-show="toastMsg"
+             x-transition
+             class="toast feedback-border"
+             :class="`feedback-${toastType}`"
+             role="alert"
+             aria-live="assertive"
+             @click="toastMsg = ''; clearTimeout(toastTimer)"
+             x-text="toastMsg">
+        </div>
     </div>
     <script>
     /* aria-busy loading indicators on HTMX buttons (Pico renders a spinner) */
@@ -86,6 +96,9 @@
             volume: 1,
             muted: false,
             profanityError: '',
+            toastMsg: '',
+            toastType: 'error',
+            toastTimer: null,
 
             // Persisted across room updates (room state morphs via SSE,
             // which would wipe these if they lived in room.html's local x-data)
@@ -109,6 +122,16 @@
                     if (e.detail?.user && this.nameTracksLogin) this.playerName = e.detail.user;
                 });
                 this.$watch('playerName', (val) => localStorage.setItem('sbPlayerName', val));
+                window.addEventListener('showToast', (e) => {
+                    this.showToast(e.detail?.message || '', e.detail?.type || 'error');
+                });
+            },
+
+            showToast(msg, type = 'error') {
+                clearTimeout(this.toastTimer);
+                this.toastMsg = msg;
+                this.toastType = type;
+                this.toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3500);
             },
 
             addLocalPlayer() {

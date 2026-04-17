@@ -201,3 +201,23 @@ kbd[data-tier] {
     margin-bottom: 20px;
 }
 
+/* ── Toast ─── */
+
+[x-cloak] { display: none !important; }
+
+.toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 240px;
+    max-width: min(480px, 90vw);
+    padding: 14px 18px;
+    border-radius: var(--pico-border-radius);
+    background: var(--bg-secondary);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+    z-index: 1000;
+    font-size: 0.95rem;
+}

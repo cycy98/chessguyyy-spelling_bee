@@ -397,12 +397,16 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(lifespan=_lifespan)
 
 
-@app.exception_handler(HtmxError)
-async def htmx_error_handler(request: Request, exc: HtmxError) -> HTMLResponse:
-    return HTMLResponse(
-        f"<p class='feedback error'>{exc.message}</p>",
-        status_code=exc.status_code,
+def toast_error(message: str, status_code: int = 200, type: str = "error") -> Response:
+    return Response(
+        status_code=status_code,
+        headers={"HX-Trigger": json.dumps({"showToast": {"message": message, "type": type}})},
     )
+
+
+@app.exception_handler(HtmxError)
+async def htmx_error_handler(request: Request, exc: HtmxError) -> Response:
+    return toast_error(exc.message, exc.status_code)
 
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -526,7 +530,7 @@ async def guess(request: Request) -> HTMLResponse:
 
 
 @app.post("/room/create", response_class=HTMLResponse)
-async def room_create(request: Request) -> HTMLResponse:
+async def room_create(request: Request) -> Response:
     state: AppState = request.app.state.srv
     check_creation_limits(state, request)
 
@@ -578,9 +582,7 @@ async def room_create(request: Request) -> HTMLResponse:
     # Solo or private lobby
     player_name = clean_name(str(form.get("player_name", "")))
     if await is_name_reserved(player_name, user):
-        return HTMLResponse(
-            "<p class='feedback error'>That name belongs to a registered account.</p>",
-        )
+        return toast_error("That name belongs to a registered account.")
     room = state.make_room(code, difficulty, visibility)
     state.rooms[code] = room
     highest_tier = await load_highest_tier(user, state.catalog.difficulties) if user else ""
@@ -602,7 +604,7 @@ async def room_create(request: Request) -> HTMLResponse:
 
 
 @app.post("/room/join", response_class=HTMLResponse)
-async def room_join(request: Request) -> HTMLResponse:
+async def room_join(request: Request) -> Response:
     state: AppState = request.app.state.srv
     check_creation_limits(state, request)
 
@@ -612,17 +614,15 @@ async def room_join(request: Request) -> HTMLResponse:
 
     room = state.rooms.get(code)
     if not room:
-        return HTMLResponse("<p class='feedback error'>Room not found.</p>")
+        return toast_error("Room not found.")
     if room.locked:
-        return HTMLResponse("<p class='feedback error'>Room is locked.</p>")
+        return toast_error("Room is locked.")
     if len(room.sessions) >= MAX_PLAYERS:
-        return HTMLResponse("<p class='feedback error'>Room is full.</p>")
+        return toast_error("Room is full.")
 
     user = get_current_user(request)
     if await is_name_reserved(player_name, user):
-        return HTMLResponse(
-            "<p class='feedback error'>That name belongs to a registered account.</p>",
-        )
+        return toast_error("That name belongs to a registered account.")
     ip = client_ip(request)
     highest_tier = await load_highest_tier(user, state.catalog.difficulties) if user else ""
     sess = state.add_player_to_room(
@@ -784,7 +784,8 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
 
         if room.turn_deadline > 0:
             ctx["time_remaining"] = min(
-                room.turn_time_limit, max(0, room.turn_deadline - time.time()),
+                room.turn_time_limit,
+                max(0, room.turn_deadline - time.time()),
             )
             ctx["time_limit"] = room.turn_time_limit
 
@@ -875,7 +876,7 @@ async def room_lock_toggle(request: Request, code: str) -> Response:
     state: AppState = request.app.state.srv
     sess, room = require_room(state, request, code)
     if room.visibility != "private":
-        return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
+        return toast_error("Invalid room.", status_code=403)
     if sess.id != room_host_sid(room):
         msg = "Only the host can lock."
         raise HtmxError(msg, 403)
@@ -905,12 +906,12 @@ async def forfeit(request: Request) -> HTMLResponse:
 
 
 @app.post("/room/{code}/restart", response_class=HTMLResponse)
-async def room_restart(request: Request, code: str) -> HTMLResponse:
+async def room_restart(request: Request, code: str) -> Response:
     """Restart a solo/local game."""
     state: AppState = request.app.state.srv
     _sess, room = require_room(state, request, code)
     if room.visibility not in ("solo", "local"):
-        return HTMLResponse("<p class='feedback error'>Invalid room.</p>", status_code=403)
+        return toast_error("Invalid room.", status_code=403)
 
     for sid in room.sessions:
         s = state.sessions.get(sid)
