@@ -71,7 +71,8 @@
         "queen": {"part_of_speech": "noun", "definition": "a female monarch", "homophones": []},
         "query": {"part_of_speech": "verb", "definition": "to ask a question", "homophones": ["cue"]},
         "queue": {"part_of_speech": "noun", "definition": "a line of people, such as the front person is dealt and people join at the back", "homophones": []},
-        "quota": {"part_of_speech": "noun", "definition": "a fixed share of something that a person or group is entitled to receive", "homophones": []},
+        "quota": {"part_of_speech": "noun", "definition": "a fixed share of something that a person or group is entitled to receive", "homophones": ["
+cue"]},
         "quote": {"part_of_speech": "noun", "definition": "a repetition of someone's words or the symbol \"", "homophones": []},
         "rain": {"part_of_speech": "noun", "definition": "water falling from clouds", "homophones": ["reign", "rein"]},
         "random": {"part_of_speech": "adjective", "definition": "lacking a pattern", "homophones": []},
