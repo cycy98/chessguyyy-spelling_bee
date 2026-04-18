@@ -126,7 +126,7 @@
                     x-effect="if (!inputLocked) $nextTick(() => $el.focus())"
                     {% if mode not in ("solo", "local") %}hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"{% endif %}
                     @keydown.enter.prevent="submitGuess(guessText)"
-                    @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-zéíō -]/g, '')"
+                    @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-zéíō \-]/g, '')"
                     placeholder="Type your answer..."
                     maxlength="50"
                     autocomplete="off" autocapitalize="characters" spellcheck="false" />
