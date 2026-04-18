@@ -18,7 +18,7 @@
 </nav>
 
 <div id="room-state" class="room-state"
-    x-init="roomCode = '{{ room.code }}'; $nextTick(() => {
+    x-init="roomCode = '{{ room.code }}'; roomLocked = {{ 'true' if room_locked else 'false' }}; $nextTick(() => {
         {% if audio_url and not room.winner and not waiting_for_players %}
         const _wk = '{{ audio_url }}|{{ word_served_at }}';
         if (lastWordKey !== _wk) {
@@ -46,9 +46,8 @@
         <kbd>{{ room.code }}</kbd>
         {% if mode == 'lobby' and is_host %}
         <button class="small outline secondary" style="margin-left:auto"
-            x-data="{locked: {{ 'true' if room_locked else 'false' }}}"
-            @click="locked = !locked; fetch('room/{{ room.code }}/lock', {method: 'POST'})"
-            x-text="locked ? 'Unlock' : 'Lock'">
+            @click="roomLocked = !roomLocked; fetch('room/{{ room.code }}/lock', {method: 'POST'})"
+            x-text="roomLocked ? 'Unlock' : 'Lock'">
         </button>
         {% endif %}
     </div>

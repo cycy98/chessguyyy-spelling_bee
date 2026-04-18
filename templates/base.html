@@ -102,6 +102,7 @@
 
             // Persisted across room updates (room state morphs via SSE,
             // which would wipe these if they lived in room.html's local x-data)
+            roomLocked: false,
             guessText: '',
             chatMsg: '',
             sideTab: 'players',
@@ -218,7 +219,7 @@
                     navigator.sendBeacon('forfeit');
                 }
                 this.roomCode = null;
-                htmx.ajax('GET', '/', {target: '#content', swap: 'innerHTML'});
+                htmx.ajax('GET', '', {target: '#content', swap: 'innerHTML'});
             },
 
             hasProfanity(text) {
