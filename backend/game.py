@@ -55,10 +55,10 @@ def display_mode(vis: Visibility) -> str:
 ROOT = Path(__file__).resolve().parent.parent
 MAX_CHAT = 80
 MAX_CHAT_LEN = 150
-MAX_WORD_LEN = 50
+MAX_WORD_LEN = 51
 STALE_MINUTES = 30
 NETWORK_GRACE = 1.0  # seconds of submit-POST cushion on the deadline - absorbs round-trip latency after visible timer expires
-MAX_CHARS_PER_SEC = 12  # physics floor for typing speed — bounds client-reported typing_ms
+MAX_CHARS_PER_SEC = 33  # physics floor for typing speed — bounds client-reported typing_ms
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
