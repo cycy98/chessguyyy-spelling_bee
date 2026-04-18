@@ -494,7 +494,7 @@ def active_session_id(room: Room) -> str | None:
 
 def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) -> float:
     chars = max(len(word) / 5, 0.2)
-    wpm_required = 10.0 if multiplayer else 5 * streak**0.8 + 10
+    wpm_required = 10.0 if multiplayer else 5 * streak**0.7 + 10
     return max(3.0, (chars / wpm_required) * 60)
 
 
