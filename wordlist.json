@@ -65,7 +65,7 @@
         "pink": {"part_of_speech": "noun", "definition": "a light red color", "homophones": []},
         "play": {"part_of_speech": "verb", "definition": "to take part in an activity for fun", "homophones": []},
         "pot": {"part_of_speech": "noun", "definition": "a deep round container used for cooking", "homophones": []},
-        "potato": {"part_of_speech": "noun", "definition": "an edible starchy tuber", "homophones": []},
+        "potato": {"part_of_speech": "noun", "definition": "an edible starchy tuber", "homophones": ["ghoughphtheightteeau","ghoughphtheightteeaux"]},
         "power": {"part_of_speech": "noun", "definition": "the capacity or ability to direct or influence the behavior of others", "homophones": []},
         "quark": {"part_of_speech": "noun", "definition": "one of the elementary subatomic particles that form matter", "homophones": []},
         "queen": {"part_of_speech": "noun", "definition": "a female monarch", "homophones": []},
