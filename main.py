@@ -121,6 +121,7 @@ class AppState:
         ip: str,
         account: str | None = None,
         highest_tier: str = "",
+        spectate: bool = False,
     ) -> Session:
         sid = make_session_id()
         sess = Session(
@@ -135,6 +136,8 @@ class AppState:
             sess.highest_tier = highest_tier
         self.sessions[sid] = sess
         room.sessions.append(sid)
+        if spectate:
+            room.eliminated.add(sid)
         room.last_activity = time.time()
         return sess
 
@@ -441,12 +444,17 @@ async def index(request: Request) -> HTMLResponse:
     # Active games indicator
     active_games: list[dict[str, Any]] = []
     total_active_players = 0
+    waiting_counts: dict[str, int] = {}
     for r in state.rooms.values():
-        if r.current_word and not r.winner and r.visibility == "public":
+        if r.visibility != "public":
+            continue
+        if r.current_word and not r.winner:
             n = len(alive_sessions(r))
             if n > 0:
-                active_games.append({"difficulty": r.difficulty, "players": n})
+                active_games.append({"difficulty": r.difficulty, "players": n, "code": r.code})
                 total_active_players += n
+        elif not r.winner and len(r.sessions) < 2:
+            waiting_counts[r.difficulty] = waiting_counts.get(r.difficulty, 0) + len(r.sessions)
     template = "fragments/menu_page.html" if request.headers.get("HX-Request") else "index.html"
     return await tpl(
         request,
@@ -457,6 +465,7 @@ async def index(request: Request) -> HTMLResponse:
             "reconnect_mode": reconnect_mode,
             "active_games": active_games,
             "total_active_players": total_active_players,
+            "waiting_counts": waiting_counts,
             **state.catalog.template_ctx(),
         },
     )
@@ -611,17 +620,19 @@ async def room_join(request: Request) -> Response:
     form = await request.form()
     code = re.sub(r"[^A-Z0-9]", "", str(form.get("room_code", "")).upper())[:6]
     player_name = clean_name(str(form.get("player_name", "")))
+    spectate = str(form.get("spectate", "")) == "1"
 
     room = state.rooms.get(code)
     if not room:
         return toast_error("Room not found.")
-    if room.locked:
-        return toast_error("Room is locked.")
-    if len(room.sessions) >= MAX_PLAYERS:
-        return toast_error("Room is full.")
+    if not spectate:
+        if room.locked:
+            return toast_error("Room is locked.")
+        if len(room.sessions) >= MAX_PLAYERS:
+            return toast_error("Room is full.")
 
     user = get_current_user(request)
-    if await is_name_reserved(player_name, user):
+    if not spectate and await is_name_reserved(player_name, user):
         return toast_error("That name belongs to a registered account.")
     ip = client_ip(request)
     highest_tier = await load_highest_tier(user, state.catalog.difficulties) if user else ""
@@ -632,8 +643,10 @@ async def room_join(request: Request) -> Response:
         ip,
         account=user,
         highest_tier=highest_tier,
+        spectate=spectate,
     )
-    room.begin_if_ready()
+    if not spectate:
+        room.begin_if_ready()
     state.room_changed(code)
 
     resp = await tpl(request, "fragments/room.html", build_room_ctx(state, room, sess))
@@ -682,7 +695,12 @@ async def public_join(request: Request) -> HTMLResponse:
                 target_room = r
                 break
 
-    if target_room is None:
+    spectate = str(form.get("spectate", "")) == "1"
+
+    if spectate:
+        if target_room is None:
+            return toast_error("No active game to watch.")
+    elif target_room is None:
         code = state.make_room_code()
         target_room = state.make_room(code, difficulty, "public")
         state.rooms[code] = target_room
@@ -695,8 +713,10 @@ async def public_join(request: Request) -> HTMLResponse:
         ip,
         account=user,
         highest_tier=highest_tier,
+        spectate=spectate,
     )
-    target_room.begin_if_ready()
+    if not spectate:
+        target_room.begin_if_ready()
     state.room_changed(target_room.code)
 
     resp = await tpl(request, "fragments/room.html", build_room_ctx(state, target_room, sess))
@@ -728,17 +748,24 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
             },
         )
 
+    is_spectator = viewer.id in room.eliminated and viewer.words_attempted == 0
+    alive = alive_sessions(room)
+
     ctx: dict[str, Any] = {
         "room": room,
         "viewer": viewer,
         "players": players,
-        "is_active": is_active,
+        "is_active": is_active and not is_spectator,
         "active_player_name": active_sess.player_name if active_sess else "",
         "mode": display_mode(room.visibility),
         "chat": list(room.chat),
-        "waiting_for_players": len(room.sessions) < 2 and not room.current_word,
+        "waiting_for_players": len(alive) < 2 and not room.current_word,
         "is_host": viewer.id == room_host_sid(room),
         "room_locked": room.locked,
+        "is_spectator": is_spectator,
+        "ready_count": len(room.ready_votes),
+        "ready_total": len(alive) if alive else len(room.sessions),
+        "viewer_voted_ready": viewer.id in room.ready_votes,
     }
 
     if room.winner:
@@ -885,6 +912,35 @@ async def room_lock_toggle(request: Request, code: str) -> Response:
     return Response(status_code=204)
 
 
+@app.post("/room/{code}/ready")
+async def room_ready(request: Request, code: str) -> Response:
+    state: AppState = request.app.state.srv
+    sess, room = require_room(state, request, code)
+    if room.visibility != "private":
+        return toast_error("Invalid room.", status_code=403)
+
+    is_host = sess.id == room_host_sid(room)
+
+    if not room.current_word and not room.winner:
+        if not is_host:
+            return toast_error("Only the host can start.", status_code=403)
+        if len(alive_sessions(room)) < 2:
+            return toast_error("Need at least 2 players.")
+        room.serve_new_word()
+        state.room_changed(code)
+        return Response(status_code=204)
+
+    if room.winner:
+        room.ready_votes.add(sess.id)
+        alive = alive_sessions(room)
+        if is_host or room.ready_votes >= set(alive):
+            room.start_new_game()
+        state.room_changed(code)
+        return Response(status_code=204)
+
+    return Response(status_code=204)
+
+
 @app.post("/forfeit", response_class=HTMLResponse)
 async def forfeit(request: Request) -> HTMLResponse:
     state: AppState = request.app.state.srv
@@ -892,14 +948,44 @@ async def forfeit(request: Request) -> HTMLResponse:
     if not sess:
         return HTMLResponse("")
 
-    if sess.room_code:
-        room = state.rooms.get(sess.room_code)
-        if room and sess.id in room.sessions:
-            rankings = room.forfeit(sess.id)
+    if not sess.room_code:
+        return HTMLResponse("")
+
+    room = state.rooms.get(sess.room_code)
+    if not room:
+        sess.room_code = None
+        return HTMLResponse("")
+
+    form = await request.form()
+    target_sid = str(form.get("target", "")).strip() or None
+
+    if target_sid:
+        if room.visibility != "private" or sess.id != room_host_sid(room):
+            msg = "Only the host can kick."
+            raise HtmxError(msg, 403)
+        if target_sid not in room.sessions or target_sid == sess.id:
+            msg = "Invalid target."
+            raise HtmxError(msg, 400)
+        target_sess = state.sessions.get(target_sid)
+        if room.current_word and not room.winner:
+            rankings = room.forfeit(target_sid)
             if rankings:
                 await persist_match_elo(room, rankings, notify=state.room_changed)
             else:
                 state.room_changed(room.code)
+        else:
+            room.sessions.remove(target_sid)
+            state.room_changed(room.code)
+        if target_sess:
+            target_sess.room_code = None
+        return HTMLResponse("")
+
+    if sess.id in room.sessions:
+        rankings = room.forfeit(sess.id)
+        if rankings:
+            await persist_match_elo(room, rankings, notify=state.room_changed)
+        else:
+            state.room_changed(room.code)
 
     sess.room_code = None
     return HTMLResponse("")

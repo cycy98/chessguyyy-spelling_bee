@@ -198,6 +198,7 @@ class Room:
     game_number: int = 1
     last_match_results: list[MatchResult] = field(default_factory=list)
     locked: bool = False
+    ready_votes: set[str] = field(default_factory=set)
     last_activity: float = field(default_factory=time.time)
     current_word: WordEntry | None = None
     word_served_at: float = 0.0
@@ -287,17 +288,23 @@ class Room:
             MatchResult(name=r["name"], rank=r["rank"], sid=r["sid"]) for r in rankings
         ]
         self.last_match_results.sort(key=lambda x: x["rank"])
-        if self.visibility != "local":
+        if self.visibility not in ("local", "private"):
             self.intermission_until = time.time() + 15
         self.last_activity = time.time()
 
         return rankings
 
     def start_new_game(self) -> None:
-        self.eliminated.clear()
+        spectator_sids = {
+            sid
+            for sid in self.eliminated
+            if (s := self.sessions_map.get(sid)) and s.words_attempted == 0
+        }
+        self.eliminated = spectator_sids
         self.winner = None
         self.last_match_results = []
         self.intermission_until = 0
+        self.ready_votes.clear()
         self.game_number += 1
         self.turn_index = 0
         self.draft_text = ""
@@ -317,7 +324,9 @@ class Room:
 
     def begin_if_ready(self) -> bool:
         """Start the game if this is the second player. Returns True if game started."""
-        if len(self.sessions) == 2 and not self.current_word:
+        if self.visibility == "private":
+            return False
+        if len(alive_sessions(self)) == 2 and not self.current_word:
             self.serve_new_word()
             return True
         return False
@@ -437,6 +446,7 @@ class Room:
         prev_active = active_session_id(self)
         was_active = prev_active == sid
         self.eliminated.add(sid)
+        self.ready_votes.discard(sid)
         self.sessions.remove(sid)
         alive = alive_sessions(self)
         rankings = None
@@ -454,12 +464,16 @@ class Room:
         return rankings
 
     def player_status(self, sid: str) -> tuple[str, str]:
+        sess = self.sessions_map.get(sid)
+        is_spectator = sid in self.eliminated and sess and sess.words_attempted == 0
         if self.winner:
+            if is_spectator:
+                return "Spectating", "spectating"
             for mr in self.last_match_results:
                 if mr["sid"] == sid:
                     return f"Rank {mr['rank']}", "winner" if mr["rank"] == 1 else "eliminated"
         elif sid in self.eliminated:
-            return "Eliminated", "eliminated"
+            return "Spectating" if is_spectator else "Eliminated", "eliminated"
         elif sid == active_session_id(self):
             return "Spelling", "spelling"
         return "Waiting", "waiting"

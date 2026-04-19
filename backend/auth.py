@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -8,9 +9,14 @@ import time
 import warnings
 from typing import TYPE_CHECKING
 
+from argon2 import PasswordHasher
+from argon2.exceptions import Argon2Error
+
 if TYPE_CHECKING:
     from starlette.requests import Request
     from starlette.responses import Response
+
+_ph = PasswordHasher(memory_cost=204800, time_cost=3, parallelism=4)
 
 _raw_secret = os.environ.get("AUTH_SECRET")
 if _raw_secret:
@@ -29,19 +35,30 @@ COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "ye
 COOKIE_MAX_AGE = 3 * 24 * 3600
 
 
-def hash_password(pw: str) -> str:
-    salt = secrets.token_bytes(16)
-    h = hashlib.scrypt(pw.encode(), salt=salt, n=16384, r=8, p=1)
-    return salt.hex() + ":" + h.hex()
+def is_legacy_hash(stored: str) -> bool:
+    return not stored.startswith("$argon2")
 
 
-def verify_password(pw: str, stored: str) -> bool:
+async def hash_password(pw: str) -> str:
+    return await asyncio.to_thread(_ph.hash, pw)
+
+
+async def verify_password(pw: str, stored: str) -> bool:
+    if is_legacy_hash(stored):
+        return await asyncio.to_thread(_verify_scrypt, pw, stored)
+    try:
+        return await asyncio.to_thread(_ph.verify, stored, pw)
+    except Argon2Error:
+        return False
+
+
+def _verify_scrypt(pw: str, stored: str) -> bool:
     try:
         salt_hex, hash_hex = stored.split(":")
         salt = bytes.fromhex(salt_hex)
         h = hashlib.scrypt(pw.encode(), salt=salt, n=16384, r=8, p=1)
         return hmac.compare_digest(h.hex(), hash_hex)
-    except Exception:
+    except (ValueError, OSError):
         return False
 
 

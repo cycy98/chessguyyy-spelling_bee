@@ -84,4 +84,21 @@
         </table>
     </figure>
     {% endif %}
+
+    {% if user == player.username %}
+    <h3>Appearance</h3>
+    <article>
+        <form hx-post="account/settings" hx-swap="none">
+            <label for="theme-select">Color theme (restart required)</label>
+            <div role="group">
+                <select id="theme-select" name="theme">
+                    {% for t in pico_themes %}
+                    <option value="{{ t }}"{% if t == player.theme %} selected{% endif %}>{{ t | capitalize }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Save</button>
+            </div>
+        </form>
+    </article>
+    {% endif %}
 </div>

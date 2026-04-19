@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, Response
 
 from backend import db
 from backend.auth import get_current_user
 from backend.errors import HtmxError
-from templating import tpl
+from templating import PICO_THEMES, tpl
 
 router = APIRouter()
 
@@ -69,11 +69,26 @@ async def account_view(request: Request, username: str) -> HTMLResponse:
         msg = "Player not found."
         raise HtmxError(msg, 404)
     all_words = request.app.state.srv.catalog.all_words
+    owner_theme = row["theme"] if row["theme"] in PICO_THEMES else "amber"
     return await tpl(
         request,
         "fragments/account.html",
-        {"player": row, **(await _account_ctx(row, all_words))},
+        {"player": row, "pico_theme": owner_theme, **(await _account_ctx(row, all_words))},
     )
+
+
+@router.post("/account/settings", response_class=HTMLResponse)
+async def update_settings(request: Request, theme: Annotated[str, Form()]) -> HTMLResponse:
+    user = get_current_user(request)
+    if not user:
+        msg = "Not logged in."
+        raise HtmxError(msg, 403)
+    if theme not in PICO_THEMES:
+        msg = "Invalid theme."
+        raise HtmxError(msg, 400)
+    async with db.transaction() as conn:
+        await conn.execute("UPDATE users SET theme=? WHERE username=?", (theme, user))
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
 
 
 @router.get("/account", response_class=HTMLResponse)

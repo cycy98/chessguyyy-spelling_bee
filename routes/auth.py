@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from backend import db
-from backend.auth import hash_password, set_auth_cookie, verify_password
+from backend.auth import hash_password, is_legacy_hash, set_auth_cookie, verify_password
 from backend.errors import HtmxError
 from templating import client_ip, tpl
 
@@ -41,7 +41,7 @@ async def register(request: Request) -> HTMLResponse:
         cursor = await conn.execute("SELECT 1 FROM users WHERE username = ?", (username,))
         if await cursor.fetchone():
             return await _err("Could not create account. Try a different username.")
-        pw_hash = hash_password(password)
+        pw_hash = await hash_password(password)
         await conn.execute(
             "INSERT INTO users (username, pw_hash) VALUES (?, ?)",
             (username, pw_hash),
@@ -67,12 +67,20 @@ async def login(request: Request) -> HTMLResponse:
 
     row = await db.fetchone("SELECT * FROM users WHERE username = ?", (username,))
 
-    if not row or not verify_password(password, row["pw_hash"]):
+    if not row or not await verify_password(password, row["pw_hash"]):
         return await tpl(
             request,
             "fragments/menu.html",
             {"auth_error": "Unknown username or password."},
         )
+
+    if is_legacy_hash(row["pw_hash"]):
+        new_hash = await hash_password(password)
+        async with db.transaction() as conn:
+            await conn.execute(
+                "UPDATE users SET pw_hash = ? WHERE username = ?",
+                (new_hash, row["username"]),
+            )
 
     resp = await tpl(request, "fragments/menu.html", {"user": row["username"], "elo": row["elo"]})
     set_auth_cookie(resp, row["username"])

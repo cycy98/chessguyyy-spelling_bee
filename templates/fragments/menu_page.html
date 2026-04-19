@@ -70,11 +70,29 @@
 </div>
 
 {% if active_games %}
-<p class="text-center" style="margin-bottom:16px">
+<p class="text-center" style="margin-bottom:8px">
     <small>{{ total_active_players }} player{{ 's' if total_active_players != 1 else '' }} in
     {{ active_games | length }} public game{{ 's' if active_games | length != 1 else '' }}:
     {% for g in active_games %}
     <kbd data-tier="{{ g.difficulty }}" style="font-size:0.75rem">{{ g.difficulty | capitalize }} ({{ g.players }})</kbd>
+    {% endfor %}
+    </small>
+</p>
+<div class="text-center" style="margin-bottom:16px">
+    {% for g in active_games %}
+    <button class="outline secondary small"
+        hx-post="room/join" hx-target="#content" hx-swap="innerHTML"
+        :hx-vals="JSON.stringify({room_code: '{{ g.code }}', player_name: playerName || 'Spectator', spectate: '1'})">
+        Watch {{ g.difficulty | capitalize }}
+    </button>
+    {% endfor %}
+</div>
+{% endif %}
+{% if waiting_counts %}
+<p class="text-center" style="margin-bottom:16px">
+    <small>Searching:
+    {% for d, n in waiting_counts.items() %}
+    <kbd data-tier="{{ d }}" style="font-size:0.75rem">{{ d | capitalize }} ({{ n }} waiting)</kbd>
     {% endfor %}
     </small>
 </p>

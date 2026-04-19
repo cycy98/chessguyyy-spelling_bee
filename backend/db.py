@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS users (
     best_wpm      INTEGER NOT NULL DEFAULT 0      CHECK(best_wpm >= 0),
     best_word     TEXT    NOT NULL DEFAULT '',
     best_streak   INTEGER NOT NULL DEFAULT 0      CHECK(best_streak >= 0),
-    tiers_cleared TEXT    NOT NULL DEFAULT ''
+    tiers_cleared TEXT    NOT NULL DEFAULT '',
+    theme         TEXT    NOT NULL DEFAULT 'amber'
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS guess_log (
@@ -103,7 +104,18 @@ async def init(path: Path) -> None:
     await conn.execute("PRAGMA foreign_keys = ON")
     await conn.execute("PRAGMA busy_timeout = 5000")
     await conn.executescript(_DDL)
-    await conn.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version', '1')")
+    _schema_v = 2
+    cur = await conn.execute("SELECT value FROM meta WHERE key='schema_version'")
+    ver_row = await cur.fetchone()
+    ver = int(ver_row[0]) if ver_row else 0
+    if ver < _schema_v:
+        # v2: add theme column (suppressed if column already exists on fresh installs)
+        with suppress(Exception):
+            await conn.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'amber'")
+        await conn.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)",
+            (str(_schema_v),),
+        )
     await conn.commit()
     _state["conn"] = conn
 

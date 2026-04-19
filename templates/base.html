@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Spelling Bee</title>
     <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.amber.min.css"
-          integrity="sha384-BiacLKDCyG54e35iUPYB3xZg4mZ2my6tLgF44LKpomzgxexC+sAL7aL7f2mxTh7J" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.{{ pico_theme }}.min.css">
     <link rel="stylesheet" href="static/styles.css">
     <style>
     {% for tier, color in tier_colors.items() %}

@@ -9,11 +9,36 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi.templating import Jinja2Templates
 
+from backend import db
 from backend.auth import get_current_user
 
 if TYPE_CHECKING:
     from fastapi import Request
     from fastapi.responses import HTMLResponse
+
+PICO_THEMES = frozenset(
+    [
+        "amber",
+        "blue",
+        "cyan",
+        "fuchsia",
+        "green",
+        "indigo",
+        "jade",
+        "lime",
+        "orange",
+        "pink",
+        "pumpkin",
+        "purple",
+        "red",
+        "rose",
+        "sand",
+        "slate",
+        "violet",
+        "yellow",
+        "zinc",
+    ],
+)
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.autoescape = True  # type: ignore[assignment]
@@ -25,6 +50,7 @@ def _name_color(name: str) -> str:
 
 
 templates.env.filters["name_color"] = _name_color
+templates.env.globals["pico_themes"] = sorted(PICO_THEMES)
 
 
 def _relative_time(ts: float) -> str:
@@ -51,9 +77,18 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
+async def _user_theme(username: str | None) -> str:
+    if not username:
+        return "amber"
+    row = await db.fetchone("SELECT theme FROM users WHERE username=?", (username,))
+    if row and row["theme"] in PICO_THEMES:
+        return row["theme"]
+    return "amber"
+
+
 async def tpl(request: Request, name: str, ctx: dict[str, Any] | None = None) -> HTMLResponse:
     user = get_current_user(request)
-    c: dict[str, Any] = {"request": request, "user": user}
+    c: dict[str, Any] = {"request": request, "user": user, "pico_theme": await _user_theme(user)}
     if ctx:
         c.update(ctx)
     return templates.TemplateResponse(request, name, c)

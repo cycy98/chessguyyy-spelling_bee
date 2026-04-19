@@ -42,6 +42,7 @@
     <!-- Status Row -->
     <div class="status-row">
         <strong>{{ viewer.player_name }}</strong>
+        {% if is_spectator %}<kbd>Spectating</kbd>{% endif %}
         <kbd data-tier="{{ room.difficulty }}">{{ room.difficulty | capitalize }}</kbd>
         {% if mode == 'lobby' %}<kbd>{{ room.code }}</kbd>{% endif %}
         {% if mode == 'lobby' and is_host %}
@@ -59,6 +60,9 @@
             <article style="text-align:center;padding:2.5rem">
                 <h3>Waiting for players...</h3>
                 <p>Share room code: <kbd style="font-size:1.2rem;letter-spacing:0.2em">{{ room.code }}</kbd></p>
+                {% if is_host and mode == 'lobby' and ready_total >= 2 %}
+                <button hx-post="room/{{ room.code }}/ready" hx-swap="none">Start Game</button>
+                {% endif %}
             </article>
             {% elif room.winner %}
             <!-- Game Over -->
@@ -95,6 +99,13 @@
             {% if mode in ('solo', 'local') %}
             <div role="group">
                 <button hx-post="room/{{ room.code }}/restart" hx-target="#room-state" hx-select="#room-state" hx-swap="morph:outerHTML">Play Again</button>
+            </div>
+            {% elif mode == 'lobby' and not is_spectator %}
+            <div role="group">
+                <button {% if viewer_voted_ready %}disabled{% endif %}
+                    hx-post="room/{{ room.code }}/ready" hx-swap="none">
+                    {% if viewer_voted_ready %}Voted ({{ ready_count }}/{{ ready_total }}){% else %}Rematch ({{ ready_count }}/{{ ready_total }}){% endif %}
+                </button>
             </div>
             {% endif %}
             {% else %}
@@ -204,6 +215,14 @@
                             <td><kbd data-tier="{{ p.highest_tier }}" style="font-size:0.7rem">{{ p.highest_tier | capitalize }}</kbd></td>
                             {% endif %}
                             <td style="text-align:right"><small>{{ p.status }}</small></td>
+                            {% if is_host and mode == 'lobby' and not p.is_viewer %}
+                            <td style="text-align:right;padding:0 4px">
+                                <button class="outline secondary small" style="padding:2px 6px;margin:0"
+                                    hx-post="forfeit" hx-vals='{"target": "{{ p.sid }}"}'
+                                    hx-swap="none"
+                                    hx-confirm="Kick {{ p.name }}?">&times;</button>
+                            </td>
+                            {% endif %}
                         </tr>
                         {% endfor %}
                     </tbody>
