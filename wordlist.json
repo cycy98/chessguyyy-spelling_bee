@@ -335,7 +335,7 @@
         "lemniscate": {"part_of_speech": "noun", "definition": "a figure-eight or infinity-shaped curve", "homophones": []},
         "lexicalization": {"part_of_speech": "noun", "definition": "the process of becoming a word", "homophones": ["lexicalisation"]},
         "lithotripsy": {"part_of_speech": "noun", "definition": "a medical procedure that breaks kidney stones into small pieces", "homophones": []},
-        "ljubljana": {"part_of_speech": "noun", "definition": "the capital of Slovenia", "homophones": []},
+        "ljubljana": {"part_of_speech": "proper noun", "definition": "the capital of Slovenia", "homophones": []},
         "logarithmic": {"part_of_speech": "adjective", "definition": "pertaining to a mathematical scale where equal intervals represent equal multiplicative changes", "homophones": []},
         "logorrhea": {"part_of_speech": "noun", "definition": "excessive wordiness", "homophones": ["logorrhoea", "logorrhœa"]},
         "luminescence": {"part_of_speech": "noun", "definition": "light produced without heat", "homophones": []},
@@ -370,7 +370,7 @@
         "quasiparticle": {"part_of_speech": "noun", "definition": "a collective excitation in a material that behaves like a particle", "homophones": []},
         "recalcitrant": {"part_of_speech": "adjective", "definition": "having an obstinately uncooperative attitude", "homophones": []},
         "recapitulate": {"part_of_speech": "verb", "definition": "to summarize and state again the main points", "homophones": []},
-        "reykjavík": {"part_of_speech": "noun", "definition": "the capital of Iceland", "homophones": ["reykjavik"]},
+        "reykjavík": {"part_of_speech": "proper noun", "definition": "the capital of Iceland", "homophones": ["reykjavik"]},
         "rhythm": {"part_of_speech": "noun", "definition": "the variation of sounds over time in speech or music", "homophones": []},
         "sagacious": {"part_of_speech": "adjective", "definition": "having or showing keen mental discernment and good judgment", "homophones": []},
         "scleroderma": {"part_of_speech": "noun", "definition": "a chronic hardening and contraction of the skin and connective tissues", "homophones": []},
@@ -472,7 +472,7 @@
         "spectrophotometry": {"part_of_speech": "noun", "definition": "the measurement of the intensity of light as a function of wavelength", "homophones": []},
         "sphygmomanometer": {"part_of_speech": "noun", "definition": "a device used to measure blood pressure", "homophones": ["sphygmomanometre"]},
         "triskaidekaphobia": {"part_of_speech": "noun", "definition": "fear of the number 13", "homophones": []},
-        "worcestershire": {"part_of_speech": "noun", "definition": "a county in England", "homophones": []}
+        "worcestershire": {"part_of_speech": "proper noun", "definition": "a county in England", "homophones": []}
     },
     "master": {
         "cholangiopancreatography": {"part_of_speech": "noun", "definition": "imaging of bile channels and the associated digestive ducts", "homophones": []},
@@ -508,8 +508,9 @@
         "acetylglucosaminephosphotransferase": {"part_of_speech": "noun", "definition": "an enzyme that transfers a phosphate-containing acetylglucosamine group to another molecule", "homophones": []},
         "antidisestablishmentarianism": {"part_of_speech": "noun", "definition": "a political position opposing the removal of official state support from a church", "homophones": []},
         "antitransubstantiationalist": {"part_of_speech": "noun", "definition": "a person who opposes a particular theological doctrine concerning the nature of a sacrament", "homophones": []},
-        "azpilicuetagaraycosaroyarenberecolarrea": {"part_of_speech": "noun", "definition": "a notably long Navarrian farmstead name", "homophones": ["azpilicuetagaraicosaroyarenberecolarrea"]},
-        "chargoggagoggmanchauggagoggchaubunagungamaugg": {"part_of_speech": "noun", "definition": "a lake located in Webster, Massachusetts, United States", "homophones": []},
+        "azpilicuetagaraycosaroyarenberecolarrea": {"part_of_speech": "proper noun", "definition": "a notably long Navarrian farmstead name", "homophones": ["azpilicuetagaraicosaroyarenberecolarrea"]},
+       "burionagonatotoregageazcoechea": {"part_of_speech": "proper noun", "definition": "a toponymic Basque surname, recognized to be one of the longest documented surnames in the world", "homophones": []},
+        "chargoggagoggmanchauggagoggchaubunagungamaugg": {"part_of_speech": "proper noun", "definition": "a lake located in Webster, Massachusetts, United States", "homophones": []},
         "conjunctivodacryocystorhinostomy": {"part_of_speech": "noun", "definition": "a surgical procedure creating a tear-drainage passage from the conjunctiva into the nasal cavity", "homophones": []},
         "dichlorodifluoromethane": {"part_of_speech": "noun", "definition": "a chlorofluorocarbon compound formerly used as a refrigerant", "homophones": []},
         "dicyclohexycarbodiimide": {"part_of_speech": "noun", "definition": "a chemical reagent used especially to join molecules in organic synthesis", "homophones": []},
