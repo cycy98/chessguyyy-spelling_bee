@@ -1,13 +1,8 @@
 Ideas to implement
 
-- Track longest correct streak and fastest average WPM.
 - Let players spectate public and private lobbies.
-- Add rematch voting for private lobbies.
 - Add lobby host controls for private rooms.
 - Add a profanity filter for usernames and chat.
-- Add an "incorrect words review" page for each account.
 - Add account avatars or profile themes.
 - Add replay/share links for strong performances.
 - Add a queue or matchmaking mode instead of manual public joining.
-- Add reconnection support if someone refreshes mid-game.
-- Add admin tools to edit bad stats or remove fake accounts.
