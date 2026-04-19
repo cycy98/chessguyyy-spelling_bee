@@ -151,6 +151,14 @@
                     this.audioObj.pause();
                     this.audioObj = null;
                 }
+                speechSynthesis.cancel();
+                const speakFallback = (onDone) => {
+                    const word = url.split('/').pop().replace(/\.[^.]+$/, '');
+                    const utter = new SpeechSynthesisUtterance(word);
+                    utter.onend = onDone;
+                    utter.onerror = onDone;
+                    speechSynthesis.speak(utter);
+                };
                 this.audioPlayedUrl = url;
                 this.audioObj = new Audio(url);
                 this.audioObj.volume = this.muted ? 0 : this.volume;
@@ -163,13 +171,17 @@
                     const unlock = () => {
                         if (!unlocked) { unlocked = true; markEnded(); this.inputLocked = false; }
                     };
-                    this.audioObj.addEventListener('ended', unlock);
-                    this.audioObj.addEventListener('error', unlock);
+                    const audio = this.audioObj;
+                    audio.addEventListener('ended', unlock);
+                    audio.addEventListener('error', () => speakFallback(unlock));
+                    audio.addEventListener('timeupdate', () => {
+                        if (audio.duration > 0.5 && audio.duration - audio.currentTime <= 0.5) unlock();
+                    });
                     const fallback = duration ? (duration * 1000) + 500 : 5000;
                     setTimeout(unlock, fallback);
                 } else {
                     this.audioObj.addEventListener('ended', markEnded);
-                    this.audioObj.addEventListener('error', markEnded);
+                    this.audioObj.addEventListener('error', () => speakFallback(markEnded));
                 }
                 this.audioObj.play().catch(() => {
                     this.inputLocked = false;

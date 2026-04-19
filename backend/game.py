@@ -57,9 +57,9 @@ MAX_CHAT = 80
 MAX_CHAT_LEN = 150
 MAX_WORD_LEN = 50
 STALE_MINUTES = 30
-NETWORK_GRACE = 1.0  # seconds of submit-POST cushion on the deadline - absorbs round-trip latency after visible timer expires
-MAX_CHARS_PER_SEC = 12  # physics floor for typing speed — bounds client-reported typing_ms
-MAX_SESSIONS_PER_IP = 20
+NETWORK_GRACE = 2.0  # anti-cheat ceiling cushion: absorbs POST round-trip + audio buffering jitter
+MAX_CHARS_PER_SEC = 15  # physics floor for typing speed — bounds client-reported typing_ms
+MAX_SESSIONS_PER_IP = 10
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
 
@@ -404,7 +404,8 @@ class Room:
         )
         is_solo = self.visibility == "solo"
 
-        if self.turn_deadline > 0 and time.time() > self.turn_deadline:
+        timed_out = self.turn_deadline > 0 and time.time() > self.turn_deadline
+        if timed_out:
             guess_text = ""
 
         sess.words_attempted += 1
@@ -427,6 +428,8 @@ class Room:
         )
 
         self._apply_to_session(sess, result, is_solo)
+        if timed_out:
+            sess.last_feedback = feedback("Time's up", f"Answer: {result.word}.")
 
         rankings = None
         if is_solo:
