@@ -2,7 +2,24 @@ Ideas to implement
 
 - Let players spectate public and private lobbies.
 - Add lobby host controls for private rooms.
+<<<<<<< HEAD
 - Add a profanity filter for usernames and chat.
 - Add account avatars or profile themes.
+||||||| parent of ebd88e5 (Homophones, ligatures, leaderboard sort)
+- Add a profanity filter for usernames and chat.
+- Add an "incorrect words review" page for each account.
+- Add account avatars or profile themes.
+=======
+>>>>>>> ebd88e5 (Homophones, ligatures, leaderboard sort)
 - Add replay/share links for strong performances.
 - Add a queue or matchmaking mode instead of manual public joining.
+<<<<<<< HEAD
+||||||| parent of ebd88e5 (Homophones, ligatures, leaderboard sort)
+- Add reconnection support if someone refreshes mid-game.
+- Add admin tools to edit bad stats or remove fake accounts.
+=======
+
+Cancelled
+- Add admin tools to edit bad stats or remove fake accounts.
+- Add account avatars or profile themes.
+>>>>>>> ebd88e5 (Homophones, ligatures, leaderboard sort)

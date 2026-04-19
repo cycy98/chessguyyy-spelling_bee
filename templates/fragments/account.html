@@ -6,7 +6,7 @@
             <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">
                 Leaderboard
             </button>
-            <button class="outline secondary" hx-get="/" hx-target="#content" hx-swap="innerHTML">Main Menu</button>
+            <button class="outline secondary" hx-get="{{ request.scope.get('root_path', '') }}/" hx-target="#content" hx-swap="innerHTML">Main Menu</button>
         </div>
     </div>
 

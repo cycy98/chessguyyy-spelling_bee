@@ -55,10 +55,10 @@ def display_mode(vis: Visibility) -> str:
 ROOT = Path(__file__).resolve().parent.parent
 MAX_CHAT = 80
 MAX_CHAT_LEN = 150
-MAX_WORD_LEN = 51
+MAX_WORD_LEN = 50
 STALE_MINUTES = 30
 NETWORK_GRACE = 1.0  # seconds of submit-POST cushion on the deadline - absorbs round-trip latency after visible timer expires
-MAX_CHARS_PER_SEC = 33  # physics floor for typing speed — bounds client-reported typing_ms
+MAX_CHARS_PER_SEC = 12  # physics floor for typing speed — bounds client-reported typing_ms
 MAX_SESSIONS_PER_IP = 20
 MAX_PLAYERS = 15
 MAX_LOCAL_PLAYERS = 12
@@ -178,6 +178,7 @@ class GuessResult:
     word: str
     tier: str
     homophone: str | None = None
+    alternatives: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -352,19 +353,28 @@ class Room:
                 body += " You stay in."
             sess.last_feedback = feedback("Correct", body, "success")
         elif result.skipped:
+            alt = (
+                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
+            )
             if is_solo:
                 sess.streak = 0
-                sess.last_feedback = feedback("Skipped", f"Answer: {result.word}.")
+                sess.last_feedback = feedback("Skipped", f"Answer: {result.word}.{alt}")
             else:
-                sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {result.word}.")
+                sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {result.word}.{alt}")
         elif is_solo:
             sess.streak = 0
+            alt = (
+                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
+            )
             sess.last_feedback = feedback(
                 "Incorrect",
-                f"Answer: {result.word}. {result.wpm} WPM.",
+                f"Answer: {result.word}.{alt} {result.wpm} WPM.",
             )
         else:
-            sess.last_feedback = feedback("Eliminated", f"Answer: {result.word}.")
+            alt = (
+                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
+            )
+            sess.last_feedback = feedback("Eliminated", f"Answer: {result.word}.{alt}")
 
     def submit_guess(
         self,
@@ -404,6 +414,7 @@ class Room:
             word=word_data["word"],
             tier=word_data["tier"],
             homophone=homophone,
+            alternatives=word_data.get("homophones", []),
         )
 
         self._apply_to_session(sess, result, is_solo)
@@ -494,7 +505,7 @@ def active_session_id(room: Room) -> str | None:
 
 def compute_time_limit(word: str, streak: int = 0, multiplayer: bool = False) -> float:
     chars = max(len(word) / 5, 0.2)
-    wpm_required = 10.0 if multiplayer else 5 * streak**0.7 + 10
+    wpm_required = 10.0 if multiplayer else 5 * streak**0.8 + 10
     return max(3.0, (chars / wpm_required) * 60)
 
 
@@ -513,8 +524,16 @@ def typing_window_s(
 
 
 def compute_wpm(guess: str, elapsed: float) -> float:
+    elapsed = max(elapsed, 2.0)
     chars = max(len(guess) / 5, 0.2)
     return min(300.0, chars / (elapsed / 60))
+
+
+_LIGATURES = str.maketrans({"æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE"})
+
+
+def _normalize(s: str) -> str:
+    return s.translate(_LIGATURES)
 
 
 def evaluate_guess(guess: str, word_entry: WordEntry) -> tuple[bool, str | None]:
@@ -523,8 +542,13 @@ def evaluate_guess(guess: str, word_entry: WordEntry) -> tuple[bool, str | None]
     g = guess.strip().lower()
     if g == target:
         return True, None
+    if any(c in target for c in "æœ") and g == _normalize(target):
+        return True, None
     for h in word_entry.get("homophones", []):
-        if g == h.lower():
+        hl = h.lower()
+        if g == hl:
+            return True, h
+        if any(c in hl for c in "æœ") and g == _normalize(hl):
             return True, h
     return False, None
 

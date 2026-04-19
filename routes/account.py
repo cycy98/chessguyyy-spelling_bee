@@ -14,14 +14,19 @@ from templating import tpl
 
 router = APIRouter()
 
+_SORT_COLS = {"elo", "games", "wins", "correct", "best_wpm", "best_streak"}
+
 
 @router.get("/leaderboard", response_class=HTMLResponse)
-async def leaderboard(request: Request) -> HTMLResponse:
+async def leaderboard(request: Request, sort: str = "elo") -> HTMLResponse:
+    if sort not in _SORT_COLS:
+        sort = "elo"
+    tiebreak = "" if sort == "elo" else ", elo DESC"
     rows = await db.fetchall(
-        "SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak, tiers_cleared"
-        " FROM users ORDER BY elo DESC LIMIT 100",
+        f"SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak"
+        f" FROM users ORDER BY {sort} DESC{tiebreak} LIMIT 100",
     )
-    return await tpl(request, "fragments/leaderboard.html", {"players": rows})
+    return await tpl(request, "fragments/leaderboard.html", {"players": rows, "sort": sort})
 
 
 async def _account_ctx(row: db.Row, all_words: dict[str, Any]) -> dict[str, Any]:

@@ -43,7 +43,7 @@
     <div class="status-row">
         <strong>{{ viewer.player_name }}</strong>
         <kbd data-tier="{{ room.difficulty }}">{{ room.difficulty | capitalize }}</kbd>
-        <kbd>{{ room.code }}</kbd>
+        {% if mode == 'lobby' %}<kbd>{{ room.code }}</kbd>{% endif %}
         {% if mode == 'lobby' and is_host %}
         <button class="small outline secondary" style="margin-left:auto"
             @click="roomLocked = !roomLocked; fetch('room/{{ room.code }}/lock', {method: 'POST'})"
@@ -89,7 +89,7 @@
             {% if feedback %}
             <article class="feedback-border feedback-{{ feedback.type }}">
                 <strong class="feedback-text">{{ feedback.title }}</strong>
-                {% if feedback.body %}<p><small>{{ feedback.body }}</small></p>{% endif %}
+                {% if feedback.body %}<p><small style="user-select:none">{{ feedback.body }}</small></p>{% endif %}
             </article>
             {% endif %}
             {% if mode in ('solo', 'local') %}
@@ -126,7 +126,8 @@
                     x-effect="if (!inputLocked) $nextTick(() => $el.focus())"
                     {% if mode not in ("solo", "local") %}hx-post="room/{{ room.code }}/draft" hx-trigger="input changed delay:100ms" hx-swap="none"{% endif %}
                     @keydown.enter.prevent="submitGuess(guessText)"
-                    @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-zéíō \-]/g, '')"
+                    @paste.prevent @drop.prevent
+                    @input="guessText = $event.target.value = $event.target.value.replace(/[^A-Za-zéíō]/g, '')"
                     placeholder="Type your answer..."
                     maxlength="50"
                     autocomplete="off" autocapitalize="characters" spellcheck="false" />
@@ -141,7 +142,7 @@
                 {% if feedback %}
                 <p class="feedback-{{ feedback.type }}" style="margin:8px 0 0">
                     <strong class="feedback-text">{{ feedback.title }}</strong>
-                    {% if feedback.body %}<small> {{ feedback.body }}</small>{% endif %}
+                    {% if feedback.body %}<small style="user-select:none"> {{ feedback.body }}</small>{% endif %}
                 </p>
                 {% endif %}
             </div>
