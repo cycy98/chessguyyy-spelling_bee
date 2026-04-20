@@ -167,7 +167,6 @@ class Session:
     words_correct: int = 0
     last_feedback: Feedback | None = None
     ip: str = ""
-    last_activity: float = field(default_factory=time.time)
 
 
 @dataclass

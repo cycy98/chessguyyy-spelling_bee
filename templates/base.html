@@ -110,11 +110,14 @@
                 window.addEventListener('beforeunload', () => {
                     if (this.roomCode) navigator.sendBeacon('forfeit');
                 });
+                window.addEventListener('htmx:sseMessage', (e) => {
+                    if (e.detail.type === 'close') this.mainMenu();
+                });
                 window.addEventListener('htmx:sseError', async () => {
                     if (!this.roomCode) return;
                     try {
                         const r = await fetch(`room/${this.roomCode}`);
-                        if (r.status === 403) this.mainMenu();
+                        if (r.status === 403 || r.status === 404) this.mainMenu();
                     } catch (_) {}
                 });
                 window.addEventListener('auth-changed', (e) => {

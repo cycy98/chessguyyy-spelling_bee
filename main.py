@@ -31,6 +31,7 @@ from backend.game import (
     ROOT,
     STALE_MINUTES,
     Catalog,
+    Ranking,
     Room,
     Session,
     Visibility,
@@ -53,6 +54,8 @@ from routes.auth import router as auth_router
 from templating import client_ip, templates, tpl
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
     from starlette.responses import Response as StarletteResponse
 
 
@@ -83,6 +86,13 @@ class AppState:
     subscribers: dict[str, set[asyncio.Queue]] = field(default_factory=lambda: defaultdict(set))
     room_timers: dict[str, asyncio.TimerHandle] = field(default_factory=dict)
     disconnect_timers: dict[str, asyncio.TimerHandle] = field(default_factory=dict)
+    tasks: set[asyncio.Task] = field(default_factory=set)
+
+    def spawn(self, coro: Coroutine[Any, Any, Any], *, name: str) -> asyncio.Task:
+        task = asyncio.create_task(coro, name=name)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
 
     def make_room(self, code: str, difficulty: str, visibility: Visibility) -> Room:
         return Room(
@@ -141,28 +151,26 @@ class AppState:
         room.last_activity = time.time()
         return sess
 
+    def _destroy_room(self, code: str) -> None:
+        room = self.rooms.pop(code, None)
+        if not room:
+            return
+        for sid in room.sessions:
+            handle = self.disconnect_timers.pop(sid, None)
+            if handle:
+                handle.cancel()
+            self.sessions.pop(sid, None)
+        for q in self.subscribers.pop(code, set()):
+            q.put_nowait({"event": "close", "data": ""})
+        handle = self.room_timers.pop(code, None)
+        if handle:
+            handle.cancel()
+
     def purge_stale(self) -> None:
         cutoff = time.time() - STALE_MINUTES * 60
         stale_rooms = [c for c, r in self.rooms.items() if r.last_activity < cutoff]
         for c in stale_rooms:
-            for sid in self.rooms[c].sessions:
-                handle = self.disconnect_timers.pop(sid, None)
-                if handle:
-                    handle.cancel()
-                self.sessions.pop(sid, None)
-            for q in self.subscribers.pop(c, set()):
-                q.put_nowait({"event": "refresh", "data": ""})
-            handle = self.room_timers.pop(c, None)
-            if handle:
-                handle.cancel()
-            del self.rooms[c]
-        stale_sessions = [
-            s
-            for s, sess in self.sessions.items()
-            if (sess.room_code and sess.room_code not in self.rooms) or sess.last_activity < cutoff
-        ]
-        for s in stale_sessions:
-            self.sessions.pop(s, None)
+            self._destroy_room(c)
         stale_ips = [
             ip
             for ip, actions in self.rate_buckets.items()
@@ -197,18 +205,25 @@ class AppState:
         loop = asyncio.get_running_loop()
         self.room_timers[code] = loop.call_later(delay, self._room_timer_fire, code)
 
+    async def finalize_mutation(self, code: str, rankings: list[Ranking] | None) -> None:
+        room = self.rooms.get(code)
+        if not room:
+            return
+        if not alive_sessions(room):
+            if rankings:
+                await persist_match_elo(room, rankings, notify=None)
+            self._destroy_room(code)
+            return
+        self.room_changed(code)
+        if rankings:
+            await persist_match_elo(room, rankings, notify=self.room_changed)
+
     def _room_timer_fire(self, code: str) -> None:
         self.room_timers.pop(code, None)
         room = self.rooms.get(code)
         if not room:
             return
-        rankings = room.tick()
-        self.room_changed(code)
-        if rankings:
-            asyncio.create_task(
-                persist_match_elo(room, rankings, notify=self.room_changed),
-                name=f"persist-{code}",
-            )
+        self.spawn(self.finalize_mutation(code, room.tick()), name=f"fire-{code}")
 
     def _schedule_disconnect_forfeit(self, code: str, sid: str) -> None:
         room = self.rooms.get(code)
@@ -225,13 +240,7 @@ class AppState:
         room = self.rooms.get(code)
         if not room:
             return
-        rankings = room.forfeit(sid)
-        self.room_changed(code)
-        if rankings:
-            asyncio.create_task(
-                persist_match_elo(room, rankings, notify=self.room_changed),
-                name=f"persist-forfeit-{sid}",
-            )
+        self.spawn(self.finalize_mutation(code, room.forfeit(sid)), name=f"df-{sid}")
 
 
 # ── HTTP helpers ──
@@ -392,8 +401,19 @@ async def _lifespan(_app: FastAPI):
     await db.init(DB_PATH)
     catalog = Catalog.load(ROOT)
     templates.env.globals["tier_colors"] = catalog.tier_colors
-    _app.state.srv = AppState(catalog=catalog)
+    state = AppState(catalog=catalog)
+    _app.state.srv = state
+
+    async def _purge_loop() -> None:
+        while True:
+            await asyncio.sleep(300)
+            state.purge_stale()
+
+    state.spawn(_purge_loop(), name="purge-loop")
     yield
+    for t in list(state.tasks):
+        t.cancel()
+    await asyncio.gather(*state.tasks, return_exceptions=True)
     await db.close()
 
 
@@ -522,10 +542,7 @@ async def guess(request: Request) -> HTMLResponse:
             tier=result.tier,
             streak=sess.streak,
         )
-    if rankings:
-        await persist_match_elo(room, rankings, notify=state.room_changed)
-    else:
-        state.room_changed(room.code)
+    await state.finalize_mutation(room.code, rankings)
 
     if room.visibility == "local":
         active_sid_val = active_session_id(room)
@@ -680,18 +697,14 @@ async def public_join(request: Request) -> HTMLResponse:
 
     # Find existing public room for this difficulty
     target_room: Room | None = None
-    for r in state.rooms.values():
+    for r in list(state.rooms.values()):
         if (
             r.visibility == "public"
             and r.difficulty == difficulty
             and len(r.sessions) < MAX_PLAYERS
         ):
-            rankings = r.tick()
-            if rankings:
-                await persist_match_elo(r, rankings, notify=state.room_changed)
-            else:
-                state.room_changed(r.code)
-            if not r.winner:
+            await state.finalize_mutation(r.code, r.tick())
+            if r.code in state.rooms and not r.winner:
                 target_room = r
                 break
 
@@ -953,7 +966,7 @@ async def forfeit(request: Request) -> HTMLResponse:
 
     room = state.rooms.get(sess.room_code)
     if not room:
-        sess.room_code = None
+        state.sessions.pop(sess.id, None)
         return HTMLResponse("")
 
     form = await request.form()
@@ -968,26 +981,18 @@ async def forfeit(request: Request) -> HTMLResponse:
             raise HtmxError(msg, 400)
         target_sess = state.sessions.get(target_sid)
         if room.current_word and not room.winner:
-            rankings = room.forfeit(target_sid)
-            if rankings:
-                await persist_match_elo(room, rankings, notify=state.room_changed)
-            else:
-                state.room_changed(room.code)
+            await state.finalize_mutation(room.code, room.forfeit(target_sid))
         else:
             room.sessions.remove(target_sid)
-            state.room_changed(room.code)
+            await state.finalize_mutation(room.code, None)
         if target_sess:
-            target_sess.room_code = None
+            state.sessions.pop(target_sess.id, None)
         return HTMLResponse("")
 
     if sess.id in room.sessions:
-        rankings = room.forfeit(sess.id)
-        if rankings:
-            await persist_match_elo(room, rankings, notify=state.room_changed)
-        else:
-            state.room_changed(room.code)
+        await state.finalize_mutation(room.code, room.forfeit(sess.id))
 
-    sess.room_code = None
+    state.sessions.pop(sess.id, None)
     return HTMLResponse("")
 
 
