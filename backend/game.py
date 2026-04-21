@@ -357,10 +357,6 @@ class Room:
                 ):
                     sess.highest_tier = t
             body = f"{result.wpm} WPM."
-            if result.homophone:
-                body = f'Accepted as "{result.homophone}". {body}'
-            if not is_solo:
-                body += " You stay in."
             sess.last_feedback = feedback("Correct", body, "success")
         elif result.skipped:
             alt = (
@@ -370,7 +366,7 @@ class Room:
                 sess.streak = 0
                 sess.last_feedback = feedback("Skipped", f"Answer: {result.word}.{alt}")
             else:
-                sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {result.word}.{alt}")
+                sess.last_feedback = feedback("Eliminated", f"Answer: {result.word}.{alt}")
         elif is_solo:
             sess.streak = 0
             alt = (
