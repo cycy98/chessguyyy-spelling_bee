@@ -195,8 +195,39 @@
         </div>
 
         <!-- Sidebar -->
-        <article class="sidebar"{% if mode == 'solo' %} hidden{% endif %}>
-            {% if mode not in ('local', 'solo') %}
+        <article class="sidebar">
+            {% if mode == 'solo' %}
+            {% set accuracy = ((words_correct / words_attempted * 100) | round | int) if words_attempted else none %}
+            {% set streak_color = 'var(--green)' if streak >= 10 else ('color-mix(in srgb, var(--amber) 70%, var(--red))' if streak >= 5 else ('var(--amber)' if streak >= 1 else 'var(--pico-muted-color)')) %}
+            {% set acc_color = 'var(--green)' if accuracy is not none and accuracy >= 80 else ('var(--amber)' if accuracy is not none and accuracy >= 50 else ('var(--red)' if accuracy is not none else 'var(--pico-muted-color)')) %}
+            <p class="stat-section-title">Session</p>
+
+            <div class="stat-hero">
+                <div class="stat-hero-value" style="color:{{ streak_color }}">{{ streak }}</div>
+                <div class="stat-sublabel">streak</div>
+                {% if best_streak > streak %}
+                <div class="stat-sublabel">best&nbsp;{{ best_streak }}</div>
+                {% endif %}
+            </div>
+
+            <hr style="margin:0 0 12px;border-color:var(--glass-border)">
+
+            <div style="margin-bottom:16px">
+                <div class="stat-accuracy-header">
+                    <span class="stat-sublabel">Accuracy</span>
+                    <strong style="color:{{ acc_color }}">{{ accuracy ~ '%' if accuracy is not none else '—' }}</strong>
+                </div>
+                <progress value="{{ words_correct }}" max="{{ words_attempted or 1 }}"
+                    style="--pico-progress-color:{{ acc_color }};margin:0"></progress>
+            </div>
+
+            <div class="stat-row">
+                <span><span class="correct">{{ words_correct }}</span> correct</span>
+                <span><span class="missed">{{ words_attempted - words_correct }}</span> missed</span>
+            </div>
+
+            {% else %}
+            {% if mode != 'local' %}
             <div role="group" style="margin-bottom:12px">
                 <button :class="sideTab === 'players' ? '' : 'outline'" class="secondary small" @click="sideTab = 'players'">Players</button>
                 <button :class="sideTab === 'chat' ? '' : 'outline'" class="secondary small" @click="sideTab = 'chat'">Chat</button>
@@ -230,7 +261,7 @@
             </div>
 
             <!-- Chat Tab -->
-            {% if mode not in ('local', 'solo') %}
+            {% if mode != 'local' %}
             <div x-show="sideTab === 'chat'" class="chat-panel">
                 <div class="chat-messages" x-init="$el.scrollTop = $el.scrollHeight">
                     {% for msg in chat %}
@@ -246,6 +277,7 @@
                     <button class="small" @click="sendChat('{{ room.code }}')">Send</button>
                 </div>
             </div>
+            {% endif %}
             {% endif %}
         </article>
     </div>

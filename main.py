@@ -358,7 +358,7 @@ class SecurityHeadersMiddleware:
         (n.encode(), v.encode())
         for n, v in [
             ("X-Content-Type-Options", "nosniff"),
-            ("X-Frame-Options", "DENY"),
+            ("X-Frame-Options", "ALLOW-FROM https://apollo.arcator.co.uk"),
             ("Referrer-Policy", "strict-origin-when-cross-origin"),
             ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
             (
@@ -371,7 +371,7 @@ class SecurityHeadersMiddleware:
                     "connect-src 'self'; "
                     "media-src 'self'; "
                     "font-src 'self' https://cdn.jsdelivr.net; "
-                    "frame-ancestors 'none';"
+                    "frame-ancestors https://apollo.arcator.co.uk;"
                 ),
             ),
         ]
@@ -833,6 +833,9 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
 
     if room.visibility == "solo":
         ctx["streak"] = viewer.streak
+        ctx["best_streak"] = viewer.best_streak
+        ctx["words_correct"] = viewer.words_correct
+        ctx["words_attempted"] = viewer.words_attempted
 
     return ctx
 

@@ -163,6 +163,7 @@ class Session:
     account_username: str | None = None
     highest_tier: str = ""
     streak: int = 0
+    best_streak: int = 0
     words_attempted: int = 0
     words_correct: int = 0
     last_feedback: Feedback | None = None
@@ -347,6 +348,7 @@ class Room:
             sess.words_correct += 1
             if is_solo:
                 sess.streak += 1
+                sess.best_streak = max(sess.best_streak, sess.streak)
             if sess.account_username and self.catalog:
                 t = result.tier
                 diffs = self.catalog.difficulties

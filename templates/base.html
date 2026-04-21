@@ -207,6 +207,17 @@
                 this.guessText = '';
                 if (!this.audioEndedAt) this.audioEndedAt = performance.now();
                 const typingMs = Math.max(0, Math.round(performance.now() - this.audioEndedAt));
+                const unlock = () => { this.inputLocked = false; };
+                const onError = (e) => {
+                    document.removeEventListener('htmx:responseError', onError);
+                    document.removeEventListener('htmx:sendError', onError);
+                    const status = e.detail?.xhr?.status;
+                    const msg = status === 403 ? 'Session expired — please rejoin.' : 'Something went wrong, try again.';
+                    this.showToast(msg, 'error');
+                    unlock();
+                };
+                document.addEventListener('htmx:responseError', onError, { once: true });
+                document.addEventListener('htmx:sendError', onError, { once: true });
                 htmx.ajax('POST', 'guess', {
                     target: '#room-state',
                     swap: 'morph:outerHTML',
