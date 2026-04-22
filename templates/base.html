@@ -1,41 +1,52 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Spelling Bee</title>
-    <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.{{ pico_theme }}.min.css">
-    <link rel="stylesheet" href="static/styles.css">
+    <base href="{{ request.scope.get('root_path', '').rstrip('/') }}/" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.{{ pico_theme }}.min.css" />
+    <link rel="stylesheet" href="static/styles.css" />
     <style>
     {% for tier, color in tier_colors.items() %}
     [data-tier="{{ tier }}"] { --tier-color: {{ color }}; }
     {% endfor %}
     </style>
     <script src="https://unpkg.com/htmx.org@2.0.8/dist/htmx.min.js"
-            integrity="sha384-/TgkGk7p307TH7EXJDuUlgG3Ce1UVolAOFopFekQkkXihi5u/6OCvVKyz1W+idaz" crossorigin="anonymous"></script>
+            integrity="sha384-/TgkGk7p307TH7EXJDuUlgG3Ce1UVolAOFopFekQkkXihi5u/6OCvVKyz1W+idaz"
+            crossorigin="anonymous"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"
-            integrity="sha384-QA9wXqexhwzXTuTvuF5QP82pddm3R2hy81UzXi7ioNTqNF2b75hlkkSGjafohhL3" crossorigin="anonymous"></script>
+            integrity="sha384-QA9wXqexhwzXTuTvuF5QP82pddm3R2hy81UzXi7ioNTqNF2b75hlkkSGjafohhL3"
+            crossorigin="anonymous"></script>
     <script src="https://unpkg.com/idiomorph@0.7.4/dist/idiomorph-ext.min.js"
-            integrity="sha384-SsScJKzATF/w6suEEdLbgYGsYFLzeKfOA6PY+/C5ZPxOSuA+ARquqtz/BZz9JWU8" crossorigin="anonymous"></script>
+            integrity="sha384-SsScJKzATF/w6suEEdLbgYGsYFLzeKfOA6PY+/C5ZPxOSuA+ARquqtz/BZz9JWU8"
+            crossorigin="anonymous"></script>
     <script src="https://unpkg.com/leo-profanity@1.9.0/src/index.js"
-            integrity="sha384-K739sy+lfaRbDbvyilsFMTguywMXHMt9c/SUU4oAQ35RmjUDh9u88x4F49hDU2ZA" crossorigin="anonymous" async></script>
-    <script defer src="https://unpkg.com/alpinejs@3.15.11/dist/cdn.min.js"
-            integrity="sha384-WPtu0YHhJ3arcykfnv1JgUffWDSKRnqnDeTpJUbOc2os2moEmLkIdaeR0trPN4be" crossorigin="anonymous"></script>
-</head>
-<body>
+            integrity="sha384-K739sy+lfaRbDbvyilsFMTguywMXHMt9c/SUU4oAQ35RmjUDh9u88x4F49hDU2ZA"
+            crossorigin="anonymous"
+            async></script>
+    <script defer
+            src="https://unpkg.com/alpinejs@3.15.11/dist/cdn.min.js"
+            integrity="sha384-WPtu0YHhJ3arcykfnv1JgUffWDSKRnqnDeTpJUbOc2os2moEmLkIdaeR0trPN4be"
+            crossorigin="anonymous"></script>
+  </head>
+  <body>
     <div x-data="spellingBee()" class="app" hx-ext="morph">
-        {% block content %}{% endblock %}
-        <div x-cloak
-             x-show="toastMsg"
-             x-transition
-             class="toast feedback-border"
-             :class="`feedback-${toastType}`"
-             role="alert"
-             aria-live="assertive"
-             @click="toastMsg = ''; clearTimeout(toastTimer)"
-             x-text="toastMsg">
-        </div>
+
+      {% block content %}
+
+      {% endblock content %}
+
+      <div x-cloak
+           x-show="toastMsg"
+           x-transition
+           class="toast feedback-border"
+           :class="`feedback-${toastType}`"
+           role="alert"
+           aria-live="assertive"
+           @click="toastMsg = ''; clearTimeout(toastTimer)"
+           x-text="toastMsg">
+      </div>
     </div>
     <script>
     /* aria-busy loading indicators on HTMX buttons (Pico renders a spinner) */
@@ -262,5 +273,5 @@
         }
     }
     </script>
-</body>
+  </body>
 </html>

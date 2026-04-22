@@ -1,6 +1,6 @@
 [project]
 name = "spellingbee"
-version = "0.2.0"
+version = "0.5.0"
 description = "Spelling bee"
 requires-python = ">=3.13"
 dependencies = [
@@ -27,3 +27,21 @@ extend-select = ["ALL"]
 extend-safe-fixes = ["ALL"]
 extend-ignore = ["D", "N", "ANN", "T201"]
 preview = true
+
+[tool.djlint]
+profile = "jinja"
+max_line_length = 120
+max_attribute_length = 120
+indent = 2
+use_gitignore = true
+close_void_tags = true
+format_attribute_template_tags = true
+preserve_blank_lines = true
+line_break_after_multiline_tag = true
+max_blank_lines = 1
+blank_line_after_tag = "block,endblock"
+blank_line_before_tag = "block,endblock"
+ignore = "H014,H021,H030,H031,J004,T028"
+
+[dependency-groups]
+dev = ["djlint>=1.36.4"]

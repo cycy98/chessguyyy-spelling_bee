@@ -358,7 +358,7 @@ class SecurityHeadersMiddleware:
         (n.encode(), v.encode())
         for n, v in [
             ("X-Content-Type-Options", "nosniff"),
-            ("X-Frame-Options", "ALLOW-FROM https://apollo.arcator.co.uk"),
+            ("X-Frame-Options", "ALLOW-FROM https://arcator.co.uk"),
             ("Referrer-Policy", "strict-origin-when-cross-origin"),
             ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
             (
@@ -371,7 +371,7 @@ class SecurityHeadersMiddleware:
                     "connect-src 'self'; "
                     "media-src 'self'; "
                     "font-src 'self' https://cdn.jsdelivr.net; "
-                    "frame-ancestors https://apollo.arcator.co.uk;"
+                    "frame-ancestors https://arcator.co.uk;"
                 ),
             ),
         ]

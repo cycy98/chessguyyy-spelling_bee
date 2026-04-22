@@ -1,104 +1,273 @@
 {# Account fragment #}
 <div data-elo="{{ player.elo | round(1) }}">
-    <div class="section-header">
-        <h2>{{ player.username }} | {{ player.elo | round(1) }} ELO</h2>
-        <div role="group">
-            <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">
-                Leaderboard
-            </button>
-            <button class="outline secondary" hx-get="{{ request.scope.get('root_path', '') }}/" hx-target="#content" hx-swap="innerHTML">Main Menu</button>
-        </div>
+  <div class="section-header">
+    <h2>
+      {{ player.username }} | {{ player.elo | round(1) }} ELO
+    </h2>
+    <div role="group">
+      <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">
+        Leaderboard
+      </button>
+      <button class="outline secondary" hx-get="{{ request.scope.get('root_path', '') }}/" hx-target="#content" hx-swap="innerHTML">
+        Main Menu
+      </button>
     </div>
+  </div>
 
-    {% set badges = [] %}
-    {% if player.wins >= 100 %}{% set _ = badges.append(("Century Club", "🏆")) %}{% endif %}
-    {% if player.correct >= 1000 %}{% set _ = badges.append(("Word Master", "📖")) %}{% endif %}
-    {% if player.games >= 500 %}{% set _ = badges.append(("Veteran", "⭐")) %}{% endif %}
-    {% if player.words >= 50 and player.correct / player.words >= 0.9 %}{% set _ = badges.append(("Sharpshooter", "🎯")) %}{% endif %}
-    {% if player.best_wpm >= 60 %}{% set _ = badges.append(("Speed Demon", "⚡")) %}{% endif %}
-    {% if badges or player.tiers_cleared %}
+  {% set badges = [] %}
+  {% if player.wins >= 100 %}
+
+    {% set _ = badges.append(("Century Club", "🏆")) %}
+  {% endif %}
+
+  {% if player.correct >= 1000 %}
+
+    {% set _ = badges.append(("Word Master", "📖")) %}
+  {% endif %}
+
+  {% if player.games >= 500 %}
+
+    {% set _ = badges.append(("Veteran", "⭐")) %}
+  {% endif %}
+
+  {% if player.words >= 50 and player.correct / player.words >= 0.9 %}
+
+    {% set _ = badges.append(("Sharpshooter", "🎯")) %}
+  {% endif %}
+
+  {% if player.best_wpm >= 60 %}
+
+    {% set _ = badges.append(("Speed Demon", "⚡")) %}
+  {% endif %}
+
+  {% if badges or player.tiers_cleared %}
+
     <div class="badge-row">
-        {% for name, icon in badges %}
+      {% for name, icon in badges %}
+
         <kbd>{{ icon }} {{ name }}</kbd>
-        {% endfor %}
-        {% if player.tiers_cleared %}
+      {% endfor %}
+
+      {% if player.tiers_cleared %}
+
         {% for t in player.tiers_cleared.split(',') if t %}
-        <kbd data-tier="{{ t }}">{{ t | capitalize }}</kbd>
+
+          <kbd data-tier="{{ t }}">{{ t | capitalize }}</kbd>
         {% endfor %}
-        {% endif %}
+
+      {% endif %}
+
     </div>
-    {% endif %}
+  {% endif %}
 
-    <article>
-        <table class="stats-table">
-            <tbody>
-                <tr><td><strong>Games Played</strong></td><td>{{ player.games }}</td></tr>
-                <tr><td><strong>Wins</strong></td><td>{{ player.wins }}{% if player.games > 0 %} <small>({{ ((player.wins / player.games * 100)) | round(1) }}%)</small>{% endif %}</td></tr>
-                <tr><td><strong>Words Attempted</strong></td><td>{{ player.words }}</td></tr>
-                <tr><td><strong>Correct Words</strong></td><td>{{ player.correct }}{% if player.words > 0 %} <small>({{ ((player.correct / player.words * 100)) | round(1) }}%)</small>{% endif %}</td></tr>
-                <tr><td><strong>Best Streak</strong></td><td>{{ player.best_streak }}</td></tr>
-                <tr><td><strong>Highest WPM</strong></td><td>{{ player.best_wpm }}{% if player.best_word %} <small>({{ player.best_word }})</small>{% endif %}</td></tr>
-                <tr><td><strong>Avg WPM (recent)</strong></td><td>{{ avg_wpm }}</td></tr>
-            </tbody>
-        </table>
-    </article>
 
-    {% if practice %}
-    <h3>Words to Practice</h3>
+  <article>
+    <table class="stats-table">
+      <tbody>
+        <tr>
+          <td>
+            <strong>Games Played</strong>
+          </td>
+          <td>
+            {{ player.games }}
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Wins</strong>
+          </td>
+          <td>
+            {{ player.wins }}
+            {% if player.games > 0 %}
+
+              <small>({{ ((player.wins / player.games * 100)) | round(1) }}%)</small>
+            {% endif %}
+
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Words Attempted</strong>
+          </td>
+          <td>
+            {{ player.words }}
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Correct Words</strong>
+          </td>
+          <td>
+            {{ player.correct }}
+            {% if player.words > 0 %}
+
+              <small>({{ ((player.correct / player.words * 100)) | round(1) }}%)</small>
+            {% endif %}
+
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Best Streak</strong>
+          </td>
+          <td>
+            {{ player.best_streak }}
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Highest WPM</strong>
+          </td>
+          <td>
+            {{ player.best_wpm }}
+            {% if player.best_word %}
+
+              <small>({{ player.best_word }})</small>
+            {% endif %}
+
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>Avg WPM (recent)</strong>
+          </td>
+          <td>
+            {{ avg_wpm }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </article>
+
+  {% if practice %}
+
+    <h3>
+      Words to Practice
+    </h3>
     <figure>
-        <table>
-            <thead>
-                <tr><th>Word</th><th>Times Missed</th><th>Definition</th></tr>
-            </thead>
-            <tbody>
-                {% for p in practice %}
-                <tr>
-                    <td>{{ p.word }}</td>
-                    <td>{{ p.n }}</td>
-                    <td><small>{{ p.definition or '—' }}</small></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </figure>
-    {% endif %}
+      <table>
+        <thead>
+          <tr>
+            <th>
+              Word
+            </th>
+            <th>
+              Times Missed
+            </th>
+            <th>
+              Definition
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in practice %}
 
-    {% if recent %}
-    <h3>Recent Activity</h3>
+            <tr>
+              <td>
+                {{ p.word }}
+              </td>
+              <td>
+                {{ p.n }}
+              </td>
+              <td>
+                <small>{{ p.definition or '—' }}</small>
+              </td>
+            </tr>
+          {% endfor %}
+
+        </tbody>
+      </table>
+    </figure>
+  {% endif %}
+
+
+  {% if recent %}
+
+    <h3>
+      Recent Activity
+    </h3>
     <figure>
-        <table>
-            <thead>
-                <tr><th>Word</th><th>Result</th><th>WPM</th><th>Tier</th><th>When</th></tr>
-            </thead>
-            <tbody>
-                {% for r in recent %}
-                <tr>
-                    <td>{{ r.word }}</td>
-                    <td>{% if r.correct %}<span class="correct">Correct</span>{% else %}<span class="missed">Missed</span>{% endif %}</td>
-                    <td>{{ r.wpm | round(1) }}</td>
-                    <td>{{ r.tier | capitalize }}</td>
-                    <td><small>{{ r.ts | relative_time }}</small></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </figure>
-    {% endif %}
+      <table>
+        <thead>
+          <tr>
+            <th>
+              Word
+            </th>
+            <th>
+              Result
+            </th>
+            <th>
+              WPM
+            </th>
+            <th>
+              Tier
+            </th>
+            <th>
+              When
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in recent %}
 
-    {% if user == player.username %}
-    <h3>Appearance</h3>
+            <tr>
+              <td>
+                {{ r.word }}
+              </td>
+              <td>
+                {% if r.correct %}
+
+                  <span class="correct">Correct</span>
+                {% else %}
+
+                  <span class="missed">Missed</span>
+                {% endif %}
+
+              </td>
+              <td>
+                {{ r.wpm | round(1) }}
+              </td>
+              <td>
+                {{ r.tier | capitalize }}
+              </td>
+              <td>
+                <small>{{ r.ts | relative_time }}</small>
+              </td>
+            </tr>
+          {% endfor %}
+
+        </tbody>
+      </table>
+    </figure>
+  {% endif %}
+
+
+  {% if user == player.username %}
+
+    <h3>
+      Appearance
+    </h3>
     <article>
-        <form hx-post="account/settings" hx-swap="none">
-            <label for="theme-select">Color theme (restart required)</label>
-            <div role="group">
-                <select id="theme-select" name="theme">
-                    {% for t in pico_themes %}
-                    <option value="{{ t }}"{% if t == player.theme %} selected{% endif %}>{{ t | capitalize }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">Save</button>
-            </div>
-        </form>
+      <form hx-post="account/settings" hx-swap="none">
+        <label for="theme-select">
+          Color theme (restart required)
+        </label>
+        <div role="group">
+          <select id="theme-select" name="theme">
+            {% for t in pico_themes %}
+
+              <option value="{{ t }}"{% if t == player.theme %} selected{% endif %}>
+                {{ t | capitalize }}
+              </option>
+            {% endfor %}
+
+          </select>
+          <button type="submit">
+            Save
+          </button>
+        </div>
+      </form>
     </article>
-    {% endif %}
+  {% endif %}
+
 </div>
