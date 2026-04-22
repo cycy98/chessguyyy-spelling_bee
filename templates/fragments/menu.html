@@ -1,46 +1,30 @@
 {# Auth + setup fragment — returned after login/logout/register #}
 {% if user %}
-
   <article id="auth-section" x-init="loggedInUser = '{{ user }}'; if (nameTracksLogin) playerName = '{{ user }}'">
     <div class="section-header">
       <strong class="amber">{{ user }} | {{ elo | round(1) }} ELO</strong>
-      <button class="secondary small" hx-post="logout" hx-target="#auth-section" hx-swap="outerHTML">
-        Logout
-      </button>
+      <button class="secondary small" hx-post="logout" hx-target="#auth-section" hx-swap="outerHTML">Logout</button>
     </div>
   </article>
 {% else %}
-
   <form id="auth-section"
         hx-post="login"
         hx-include="#auth-username, #auth-password"
         hx-target="this"
         hx-swap="outerHTML"
         x-init="loggedInUser = ''">
-    <label for="auth-username">
-      Username
-    </label>
+    <label for="auth-username">Username</label>
     <input type="text" name="username" minlength="3" maxlength="24" id="auth-username" autocomplete="username" />
-    <label for="auth-password">
-      Password
-    </label>
+    <label for="auth-password">Password</label>
     <input type="password" name="password" minlength="8" maxlength="128" id="auth-password" autocomplete="current-password" />
     <div role="group">
-      <button type="submit">
-        Login
-      </button>
+      <button type="submit">Login</button>
       <button type="button" class="secondary" hx-post="register" hx-include="#auth-username, #auth-password">
         Register
       </button>
     </div>
     <div id="auth-feedback">
-      {% if auth_error %}
-
-        <p class="error">
-          {{ auth_error }}
-        </p>
-      {% endif %}
-
+      {% if auth_error %}<p class="error">{{ auth_error }}</p>{% endif %}
     </div>
   </form>
 {% endif %}

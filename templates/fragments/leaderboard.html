@@ -7,9 +7,7 @@
 </style>
 <div>
   <div class="section-header">
-    <h2>
-      {{ players | length }} tracked players.
-    </h2>
+    <h2>{{ players | length }} tracked players.</h2>
     <button class="outline secondary" hx-get="{{ request.scope.get('root_path', '') }}/" hx-target="#content" hx-swap="innerHTML">
       Main Menu
     </button>
@@ -17,33 +15,22 @@
 
   {% macro sort_th(col, label) %}
     <th class="lb-sort-header
-               {% if sort == col %}
-                 lb-sort-active
-               {% endif %}"
+               {% if sort == col %}lb-sort-active{% endif %}"
         hx-get="leaderboard?sort={{ col }}"
         hx-target="#content"
         hx-swap="innerHTML">
       {{ label }}
-      {% if sort == col %}
-
-        ↓
-      {% endif %}
-
+      {% if sort == col %}↓{% endif %}
     </th>
   {% endmacro %}
 
   {% if players | length > 0 %}
-
     <figure>
       <table>
         <thead>
           <tr>
-            <th>
-              #
-            </th>
-            <th>
-              Player
-            </th>
+            <th>#</th>
+            <th>Player</th>
             {{ sort_th('elo', 'ELO') }}
             {{ sort_th('games', 'Games') }}
             {{ sort_th('wins', 'Wins') }}
@@ -54,45 +41,31 @@
         </thead>
         <tbody>
           {% for p in players %}
-
             <tr style="border-left:3px solid {{ p.username | name_color }}">
-              <td>
-                {{ loop.index }}
-              </td>
+              <td>{{ loop.index }}</td>
               <td>
                 <a href="#" style="font-weight:600" hx-get="account/{{ p.username }}" hx-target="#content" hx-swap="innerHTML">
                   {{ p.username }}
                 </a>
               </td>
-              <td>
-                {{ p.elo | round(1) }}
-              </td>
-              <td>
-                {{ p.games }}
-              </td>
+              <td>{{ p.elo | round(1) }}</td>
+              <td>{{ p.games }}</td>
               <td>
                 {{ p.wins }} <span class="lb-sub">({{ ((p.wins / p.games * 100) if p.games > 0 else 0) | round(1) }}%)</span>
               </td>
               <td>
                 {{ p.correct }} <span class="lb-sub">({{ ((p.correct / p.words * 100) if p.words > 0 else 0) | round(1) }}%)</span>
               </td>
-              <td title="{{ p.best_word }}">
-                {{ p.best_wpm }}
-              </td>
-              <td>
-                {{ p.best_streak }}
-              </td>
+              <td title="{{ p.best_word }}">{{ p.best_wpm }}</td>
+              <td>{{ p.best_streak }}</td>
             </tr>
           {% endfor %}
-
         </tbody>
       </table>
     </figure>
   {% else %}
-
     <p class="text-center" style="padding:40px">
       <small>No players yet. Register and play to appear here!</small>
     </p>
   {% endif %}
-
 </div>

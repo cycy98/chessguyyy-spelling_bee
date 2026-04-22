@@ -32,11 +32,8 @@
   </head>
   <body>
     <div x-data="spellingBee()" class="app" hx-ext="morph">
-
       {% block content %}
-
       {% endblock content %}
-
       <div x-cloak
            x-show="toastMsg"
            x-transition
@@ -45,8 +42,7 @@
            role="alert"
            aria-live="assertive"
            @click="toastMsg = ''; clearTimeout(toastTimer)"
-           x-text="toastMsg">
-      </div>
+           x-text="toastMsg"></div>
     </div>
     <script>
     /* aria-busy loading indicators on HTMX buttons (Pico renders a spinner) */

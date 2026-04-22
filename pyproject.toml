@@ -1,6 +1,6 @@
 [project]
 name = "spellingbee"
-version = "0.5.0"
+version = "0.6.0"
 description = "Spelling bee"
 requires-python = ">=3.13"
 dependencies = [
@@ -25,8 +25,23 @@ explicit-preview-rules = true
 select = ["ALL"]
 extend-select = ["ALL"]
 extend-safe-fixes = ["ALL"]
-extend-ignore = ["D", "N", "ANN", "T201"]
+extend-ignore = [
+    "D",
+    "N",
+    "ANN",
+    "T201",
+    "PLR2004",
+    "FBT001",
+    "FBT002",
+    "C901",
+    "PLR0913",
+    "PLR0912",
+    "EXE001",
+]
 preview = true
+
+[tool.ruff.lint.per-file-ignores]
+"bench_argon2.py" = ["S105", "ERA001"]
 
 [tool.djlint]
 profile = "jinja"
@@ -36,8 +51,7 @@ indent = 2
 use_gitignore = true
 close_void_tags = true
 format_attribute_template_tags = true
-preserve_blank_lines = true
-line_break_after_multiline_tag = true
+line_break_after_multiline_tag = false
 max_blank_lines = 1
 ignore = "H014,H021,H030,H031,J004,T028"
 

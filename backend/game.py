@@ -138,7 +138,7 @@ def _load_audio_durations(root: Path) -> dict[str, float]:
         return {}
     durations: dict[str, float] = {}
     try:
-        from mutagen.mp3 import MP3
+        from mutagen.mp3 import MP3  # noqa: PLC0415
 
         for p in audios_dir.glob("*.mp3"):
             try:
@@ -210,7 +210,7 @@ class Room:
     # --- State-transition methods ---
 
     def serve_new_word(self, streak: int = 0) -> None:
-        assert self.catalog is not None, "Room.catalog must be injected before serving words"
+        assert self.catalog is not None, "Room.catalog must be injected before serving words"  # noqa: S101
         word_data = self.catalog.pick_word(self.difficulty)
         self.current_word = word_data
         self.word_served_at = time.time()
@@ -357,6 +357,10 @@ class Room:
                 ):
                     sess.highest_tier = t
             body = f"{result.wpm} WPM."
+            if result.homophone:
+                body = f'Accepted as "{result.homophone}". {body}'
+            if not is_solo:
+                body += " You stay in."
             sess.last_feedback = feedback("Correct", body, "success")
         elif result.skipped:
             alt = (
@@ -366,7 +370,7 @@ class Room:
                 sess.streak = 0
                 sess.last_feedback = feedback("Skipped", f"Answer: {result.word}.{alt}")
             else:
-                sess.last_feedback = feedback("Eliminated", f"Answer: {result.word}.{alt}")
+                sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {result.word}.{alt}")
         elif is_solo:
             sess.streak = 0
             alt = (
@@ -482,8 +486,8 @@ class Room:
 # ── Pure helpers ──
 
 
-def feedback(title: str, body: str, type: str = "error") -> Feedback:
-    return Feedback(title=title, body=body, type=type)
+def feedback(title: str, body: str, kind: str = "error") -> Feedback:
+    return Feedback(title=title, body=body, type=kind)
 
 
 def make_session_id() -> str:

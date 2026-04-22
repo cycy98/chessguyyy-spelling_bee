@@ -23,7 +23,7 @@ async def leaderboard(request: Request, sort: str = "elo") -> HTMLResponse:
         sort = "elo"
     tiebreak = "" if sort == "elo" else ", elo DESC"
     rows = await db.fetchall(
-        f"SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak"
+        f"SELECT username, elo, games, wins, words, correct, best_wpm, best_word, best_streak"  # noqa: S608
         f" FROM users ORDER BY {sort} DESC{tiebreak} LIMIT 100",
     )
     return await tpl(request, "fragments/leaderboard.html", {"players": rows, "sort": sort})

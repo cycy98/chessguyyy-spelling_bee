@@ -11,7 +11,7 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
@@ -225,7 +225,7 @@ class AppState:
             return
         self.spawn(self.finalize_mutation(code, room.tick()), name=f"fire-{code}")
 
-    def _schedule_disconnect_forfeit(self, code: str, sid: str) -> None:
+    def schedule_disconnect_forfeit(self, code: str, sid: str) -> None:
         room = self.rooms.get(code)
         if not room or room.visibility in ("solo", "local"):
             return
@@ -354,7 +354,7 @@ class BodyLimitMiddleware:
 class SecurityHeadersMiddleware:
     """Add security response headers to every HTML response."""
 
-    _HEADERS: list[tuple[bytes, bytes]] = [
+    _HEADERS: ClassVar[list[tuple[bytes, bytes]]] = [
         (n.encode(), v.encode())
         for n, v in [
             ("X-Content-Type-Options", "nosniff"),
@@ -365,7 +365,7 @@ class SecurityHeadersMiddleware:
                 "Content-Security-Policy",
                 (
                     "default-src 'self'; "
-                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; "
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; "  # noqa: E501
                     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                     "img-src 'self' data:; "
                     "connect-src 'self'; "
@@ -420,15 +420,15 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(lifespan=_lifespan)
 
 
-def toast_error(message: str, status_code: int = 200, type: str = "error") -> Response:
+def toast_error(message: str, status_code: int = 200, kind: str = "error") -> Response:
     return Response(
         status_code=status_code,
-        headers={"HX-Trigger": json.dumps({"showToast": {"message": message, "type": type}})},
+        headers={"HX-Trigger": json.dumps({"showToast": {"message": message, "type": kind}})},
     )
 
 
 @app.exception_handler(HtmxError)
-async def htmx_error_handler(request: Request, exc: HtmxError) -> Response:
+async def htmx_error_handler(request: Request, exc: HtmxError) -> Response:  # noqa: ARG001
     return toast_error(exc.message, exc.status_code)
 
 
@@ -578,7 +578,7 @@ async def room_create(request: Request) -> Response:
             raw = json.loads(str(form.get("players", "[]")))
         except (json.JSONDecodeError, ValueError):
             msg = "Invalid player list."
-            raise HtmxError(msg, 400)
+            raise HtmxError(msg, 400) from None
         if not isinstance(raw, list) or not raw or not all(isinstance(n, str) for n in raw):
             msg = "Invalid player list."
             raise HtmxError(msg, 400)
@@ -788,9 +788,8 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
             if mr["sid"] == viewer.id:
                 parts = [f"Rank: {mr['rank']}."]
                 if "elo" in mr:
-                    parts.append(
-                        f"ELO: {mr['elo']} ({'+' if mr['elo_delta'] >= 0 else ''}{mr['elo_delta']}).",
-                    )
+                    sign = "+" if mr["elo_delta"] >= 0 else ""
+                    parts.append(f"ELO: {mr['elo']} ({sign}{mr['elo_delta']}).")
                 ctx["feedback"]["body"] = " ".join(parts)
                 break
         if room.intermission_until > time.time():
@@ -881,7 +880,7 @@ async def room_stream(request: Request, code: str):
             state.subscribers[code].discard(q)
             if code in state.subscribers and not state.subscribers[code]:
                 del state.subscribers[code]
-            state._schedule_disconnect_forfeit(code, sid)
+            state.schedule_disconnect_forfeit(code, sid)
 
     return EventSourceResponse(gen(), ping=15)
 

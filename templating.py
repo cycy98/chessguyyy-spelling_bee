@@ -45,7 +45,7 @@ templates.env.autoescape = True  # type: ignore[assignment]
 
 
 def _name_color(name: str) -> str:
-    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)
+    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)  # noqa: S324
     return f"hsl({h % 360}, 65%, 55%)"
 
 
