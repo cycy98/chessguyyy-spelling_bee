@@ -32,6 +32,11 @@ else:
 # Set COOKIE_SECURE=true in production (HTTPS). Leave unset for local HTTP dev.
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
+# Comma-separated usernames granted admin privileges, e.g. ADMIN_USERS=alice,bob
+ADMIN_USERS: frozenset[str] = frozenset(
+    u.strip() for u in os.environ.get("ADMIN_USERS", "").split(",") if u.strip()
+)
+
 COOKIE_MAX_AGE = 3 * 24 * 3600
 
 

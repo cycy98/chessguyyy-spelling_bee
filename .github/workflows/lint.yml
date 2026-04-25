@@ -30,3 +30,8 @@ jobs:
         with:
           version: "latest"
           args: "format --check --respect-gitignore"
+
+      - name: Check audio coverage
+        run: |
+          pip install mutagen
+          python tests/check_audio.py

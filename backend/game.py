@@ -27,8 +27,13 @@ class WordEntry(TypedDict):
 
 class Feedback(TypedDict):
     title: str
-    body: str
     type: str
+    body: NotRequired[str]
+    word: NotRequired[str]
+    definition: NotRequired[str]
+    wpm: NotRequired[float]
+    homophone: NotRequired[str]
+    alternatives: NotRequired[list[str]]
 
 
 class Ranking(TypedDict):
@@ -42,6 +47,8 @@ class MatchResult(TypedDict):
     name: str
     rank: int
     sid: str
+    words_correct: int
+    words_attempted: int
     elo: NotRequired[float]
     elo_delta: NotRequired[float]
 
@@ -177,6 +184,7 @@ class GuessResult:
     wpm: float
     word: str
     tier: str
+    definition: str = ""
     homophone: str | None = None
     alternatives: list[str] = field(default_factory=list)
 
@@ -235,7 +243,11 @@ class Room:
             return None
         sess = self.sessions_map.get(active_sid)
         if sess:
-            sess.last_feedback = feedback("Time's up", "Counted as a skip.")
+            fb: Feedback = {"title": "Time's up", "type": "error"}
+            if self.current_word:
+                fb["word"] = self.current_word["word"]
+                fb["definition"] = self.current_word.get("definition", "")
+            sess.last_feedback = fb
         self.eliminated.add(active_sid)
         return self.advance_turn(eliminated=True)
 
@@ -284,9 +296,18 @@ class Room:
             )
 
         # Set basic scoreboard immediately (ELO enriched later by persist_match_elo)
-        self.last_match_results = [
-            MatchResult(name=r["name"], rank=r["rank"], sid=r["sid"]) for r in rankings
-        ]
+        self.last_match_results = []
+        for r in rankings:
+            s = self.sessions_map.get(r["sid"])
+            self.last_match_results.append(
+                MatchResult(
+                    name=r["name"],
+                    rank=r["rank"],
+                    sid=r["sid"],
+                    words_correct=s.words_correct if s else 0,
+                    words_attempted=s.words_attempted if s else 0,
+                ),
+            )
         self.last_match_results.sort(key=lambda x: x["rank"])
         if self.visibility not in ("local", "private"):
             self.intermission_until = time.time() + 15
@@ -356,35 +377,48 @@ class Room:
                     not sess.highest_tier or diffs.index(t) > diffs.index(sess.highest_tier)
                 ):
                     sess.highest_tier = t
-            body = f"{result.wpm} WPM."
+            fb: Feedback = {"title": "Correct", "type": "success", "wpm": result.wpm}
             if result.homophone:
-                body = f'Accepted as "{result.homophone}". {body}'
+                fb["homophone"] = result.homophone
             if not is_solo:
-                body += " You stay in."
-            sess.last_feedback = feedback("Correct", body, "success")
+                fb["body"] = "You stay in."
+            sess.last_feedback = fb
         elif result.skipped:
-            alt = (
-                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
-            )
             if is_solo:
                 sess.streak = 0
-                sess.last_feedback = feedback("Skipped", f"Answer: {result.word}.{alt}")
-            else:
-                sess.last_feedback = feedback("Eliminated", f"Skipped. Answer: {result.word}.{alt}")
+            fb: Feedback = {
+                "title": "Skipped" if is_solo else "Eliminated",
+                "type": "error",
+                "word": result.word,
+                "definition": result.definition,
+            }
+            if not is_solo:
+                fb["body"] = "Skipped."
+            if result.alternatives:
+                fb["alternatives"] = result.alternatives
+            sess.last_feedback = fb
         elif is_solo:
             sess.streak = 0
-            alt = (
-                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
-            )
-            sess.last_feedback = feedback(
-                "Incorrect",
-                f"Answer: {result.word}.{alt} {result.wpm} WPM.",
-            )
+            fb: Feedback = {
+                "title": "Incorrect",
+                "type": "error",
+                "word": result.word,
+                "definition": result.definition,
+                "wpm": result.wpm,
+            }
+            if result.alternatives:
+                fb["alternatives"] = result.alternatives
+            sess.last_feedback = fb
         else:
-            alt = (
-                f" Also accepted: {', '.join(result.alternatives)}." if result.alternatives else ""
-            )
-            sess.last_feedback = feedback("Eliminated", f"Answer: {result.word}.{alt}")
+            fb: Feedback = {
+                "title": "Eliminated",
+                "type": "error",
+                "word": result.word,
+                "definition": result.definition,
+            }
+            if result.alternatives:
+                fb["alternatives"] = result.alternatives
+            sess.last_feedback = fb
 
     def submit_guess(
         self,
@@ -424,13 +458,19 @@ class Room:
             wpm=wpm,
             word=word_data["word"],
             tier=word_data["tier"],
+            definition=word_data.get("definition", ""),
             homophone=homophone,
             alternatives=word_data.get("homophones", []),
         )
 
         self._apply_to_session(sess, result, is_solo)
         if timed_out:
-            sess.last_feedback = feedback("Time's up", f"Answer: {result.word}.")
+            sess.last_feedback = {
+                "title": "Time's up",
+                "type": "error",
+                "word": result.word,
+                "definition": result.definition,
+            }
 
         rankings = None
         if is_solo:
@@ -486,8 +526,11 @@ class Room:
 # ── Pure helpers ──
 
 
-def feedback(title: str, body: str, kind: str = "error") -> Feedback:
-    return Feedback(title=title, body=body, type=kind)
+def feedback(title: str, body: str = "", kind: str = "error") -> Feedback:
+    f: Feedback = {"title": title, "type": kind}
+    if body:
+        f["body"] = body
+    return f
 
 
 def make_session_id() -> str:

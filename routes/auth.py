@@ -9,7 +9,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from backend import db
-from backend.auth import hash_password, is_legacy_hash, set_auth_cookie, verify_password
+from backend.auth import (
+    get_current_user,
+    hash_password,
+    is_legacy_hash,
+    set_auth_cookie,
+    verify_password,
+)
 from backend.errors import HtmxError
 from templating import client_ip, tpl
 
@@ -85,6 +91,50 @@ async def login(request: Request) -> HTMLResponse:
     resp = await tpl(request, "fragments/menu.html", {"user": row["username"], "elo": row["elo"]})
     set_auth_cookie(resp, row["username"])
     resp.headers["HX-Trigger"] = json.dumps({"auth-changed": {"user": row["username"]}})
+    return resp
+
+
+@router.post("/set-password", response_class=HTMLResponse)
+async def set_password(request: Request) -> HTMLResponse:
+    logged_in_user = get_current_user(request)
+    if not logged_in_user:
+        msg = "Login required."
+        raise HtmxError(msg, 403)
+
+    state = request.app.state.srv
+    ip = client_ip(request)
+    if not state.check_rate(ip, "login"):
+        msg = "Too many attempts. Try again later."
+        raise HtmxError(msg, 429)
+
+    form = await request.form()
+    old_password = str(form.get("old_password", ""))
+    new_password = str(form.get("password", ""))
+
+    async def _err(msg: str) -> HTMLResponse:
+        return await tpl(request, "fragments/menu.html", {"user": logged_in_user, "pw_error": msg})
+
+    if len(new_password) < 8 or len(new_password) > 128:
+        return await _err("Password must be 8-128 characters.")
+
+    row = await db.fetchone("SELECT pw_hash, elo FROM users WHERE username=?", (logged_in_user,))
+    if not row:
+        msg = "Account not found."
+        raise HtmxError(msg, 404)
+
+    if not await verify_password(old_password, row["pw_hash"]):
+        return await _err("Current password is incorrect.")
+
+    pw_hash = await hash_password(new_password)
+    async with db.transaction() as conn:
+        await conn.execute(
+            "UPDATE users SET pw_hash = ? WHERE username = ?",
+            (pw_hash, logged_in_user),
+        )
+
+    resp = await tpl(request, "fragments/menu.html", {"user": logged_in_user, "elo": row["elo"]})
+    set_auth_cookie(resp, logged_in_user)
+    resp.headers["HX-Trigger"] = json.dumps({"auth-changed": {"user": logged_in_user}})
     return resp
 
 

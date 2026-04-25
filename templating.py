@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -10,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi.templating import Jinja2Templates
 
 from backend import db
-from backend.auth import get_current_user
+from backend.auth import ADMIN_USERS, get_current_user
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -45,7 +44,10 @@ templates.env.autoescape = True  # type: ignore[assignment]
 
 
 def _name_color(name: str) -> str:
-    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)  # noqa: S324
+    h = 5381
+    for c in name:
+        h = ((h << 5) + h) ^ ord(c)
+        h &= 0xFFFFFFFF  # mirror JS 32-bit coercion
     return f"hsl({h % 360}, 65%, 55%)"
 
 
@@ -88,7 +90,12 @@ async def _user_theme(username: str | None) -> str:
 
 async def tpl(request: Request, name: str, ctx: dict[str, Any] | None = None) -> HTMLResponse:
     user = get_current_user(request)
-    c: dict[str, Any] = {"request": request, "user": user, "pico_theme": await _user_theme(user)}
+    c: dict[str, Any] = {
+        "request": request,
+        "user": user,
+        "pico_theme": await _user_theme(user),
+        "is_admin": user in ADMIN_USERS,
+    }
     if ctx:
         c.update(ctx)
     return templates.TemplateResponse(request, name, c)

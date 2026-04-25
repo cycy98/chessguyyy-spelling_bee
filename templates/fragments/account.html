@@ -1,42 +1,29 @@
 {# Account fragment #}
-<div data-elo="{{ player.elo | round(1) }}">
-  <div class="section-header">
-    <h2>{{ player.username }} | {{ player.elo | round(1) }} ELO</h2>
-    <div role="group">
-      <button class="outline secondary" hx-get="leaderboard" hx-target="#content" hx-swap="innerHTML">Leaderboard</button>
-      <button class="outline secondary" hx-get="{{ request.scope.get('root_path', '') }}/" hx-target="#content" hx-swap="innerHTML">
-        Main Menu
-      </button>
-    </div>
-  </div>
+<div>
+  <header class="section-header">
+    <hgroup>
+      <h2>{{ player.username }}</h2>
+      <p>{{ player.elo | round(1) }} ELO</p>
+    </hgroup>
+    <nav aria-label="Account navigation">
+      <div role="group">
+        <button type="button" class="outline secondary" @click="location.hash = 'leaderboard'">Leaderboard</button>
+        <button type="button" class="outline secondary" @click="mainMenu()">Main Menu</button>
+      </div>
+    </nav>
+  </header>
 
-  {% set badges = [] %}
-  {% if player.wins >= 100 %}
-    {% set _ = badges.append(("Century Club", "🏆")) %}
-  {% endif %}
-  {% if player.correct >= 1000 %}
-    {% set _ = badges.append(("Word Master", "📖")) %}
-  {% endif %}
-  {% if player.games >= 500 %}
-    {% set _ = badges.append(("Veteran", "⭐")) %}
-  {% endif %}
-  {% if player.words >= 50 and player.correct / player.words >= 0.9 %}
-    {% set _ = badges.append(("Sharpshooter", "🎯")) %}
-  {% endif %}
-  {% if player.best_wpm >= 60 %}
-    {% set _ = badges.append(("Speed Demon", "⚡")) %}
-  {% endif %}
-  {% if badges or player.tiers_cleared %}
+  {% if badges or tiers %}
     <div class="badge-row">
       {% for name, icon in badges %}<kbd>{{ icon }} {{ name }}</kbd>{% endfor %}
-      {% if player.tiers_cleared %}
-        {% for t in player.tiers_cleared.split(',') if t %}<kbd data-tier="{{ t }}">{{ t | capitalize }}</kbd>{% endfor %}
-      {% endif %}
+      {% for t in tiers %}<kbd data-tier="{{ t }}">{{ t | capitalize }}</kbd>{% endfor %}
     </div>
   {% endif %}
 
   <article>
+    <figure>
     <table class="stats-table">
+      <caption class="sr-only">Player statistics for {{ player.username }}</caption>
       <tbody>
         <tr>
           <td>
@@ -95,6 +82,7 @@
         </tr>
       </tbody>
     </table>
+    </figure>
   </article>
 
   {% if practice %}
@@ -159,6 +147,33 @@
     </figure>
   {% endif %}
 
+  {% if is_admin and user != player.username %}
+    <h3>Admin</h3>
+    <article>
+      <form hx-post="admin/user/{{ player.username }}/edit" hx-target="#content" hx-swap="innerHTML">
+        <div class="grid">
+          <label>ELO<input type="number" step="0.1" name="elo" value="{{ player.elo | round(1) }}" min="0" max="9999" required></label>
+          <label>Games<input type="number" name="games" value="{{ player.games }}" min="0" max="99999" required></label>
+          <label>Wins<input type="number" name="wins" value="{{ player.wins }}" min="0" max="99999" required></label>
+          <label>Words<input type="number" name="words" value="{{ player.words }}" min="0" max="999999" required></label>
+          <label>Correct<input type="number" name="correct" value="{{ player.correct }}" min="0" max="999999" required></label>
+          <label>Best WPM<input type="number" name="best_wpm" value="{{ player.best_wpm }}" min="0" max="9999" required></label>
+          <label>Best Streak<input type="number" name="best_streak" value="{{ player.best_streak }}" min="0" max="9999" required></label>
+          <label>Best Word<input type="text" name="best_word" value="{{ player.best_word }}"></label>
+        </div>
+        <button type="submit">Save Changes</button>
+      </form>
+      <hr>
+      <button class="secondary"
+              hx-post="admin/user/{{ player.username }}/delete"
+              hx-target="#content"
+              hx-swap="innerHTML"
+              hx-confirm="Permanently delete {{ player.username }}? This cannot be undone.">
+        Delete User
+      </button>
+    </article>
+  {% endif %}
+
   {% if user == player.username %}
     <h3>Appearance</h3>
     <article>
@@ -174,5 +189,14 @@
         </div>
       </form>
     </article>
+
+    {% if discord_id %}
+      <h3>Integrations</h3>
+      <article>
+        <a href="https://discord.com/oauth2/authorize?client_id={{ discord_id }}">
+          <button type="button">Add to Discord</button>
+        </a>
+      </article>
+    {% endif %}
   {% endif %}
 </div>

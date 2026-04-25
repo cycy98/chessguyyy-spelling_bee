@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
@@ -423,7 +423,10 @@ app = FastAPI(lifespan=_lifespan)
 def toast_error(message: str, status_code: int = 200, kind: str = "error") -> Response:
     return Response(
         status_code=status_code,
-        headers={"HX-Trigger": json.dumps({"showToast": {"message": message, "type": kind}})},
+        headers={
+            "HX-Reswap": "none",
+            "HX-Trigger": json.dumps({"showToast": {"message": message, "type": kind}}),
+        },
     )
 
 
@@ -438,6 +441,56 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 app.mount("/audios", ImmutableStaticFiles(directory=str(ROOT / "audios")), name="audios")
 app.include_router(auth_router)
 app.include_router(account_router)
+
+# ── PWA ──
+
+
+@app.get("/sw.js")
+async def service_worker() -> FileResponse:
+    return FileResponse(
+        ROOT / "static" / "sw.js",
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/manifest.json")
+async def manifest() -> Response:
+    return Response(
+        json.dumps(
+            {
+                "name": "Spelling Bee",
+                "short_name": "Spelling Bee",
+                "start_url": ".",
+                "scope": ".",
+                "display": "standalone",
+                "theme_color": "#0f1729",
+                "background_color": "#0f1729",
+                "icons": [
+                    {
+                        "src": "static/icon-192.png",
+                        "sizes": "192x192",
+                        "type": "image/png",
+                        "purpose": "any",
+                    },
+                    {
+                        "src": "static/icon-192.png",
+                        "sizes": "192x192",
+                        "type": "image/png",
+                        "purpose": "maskable",
+                    },
+                    {
+                        "src": "static/icon-512.png",
+                        "sizes": "512x512",
+                        "type": "image/png",
+                        "purpose": "any",
+                    },
+                ],
+            },
+        ),
+        media_type="application/manifest+json",
+    )
+
 
 # ── Routes ───
 
@@ -741,6 +794,7 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
     active_sid = active_session_id(room)
     is_active = viewer.id == active_sid
     active_sess = state.sessions.get(active_sid) if active_sid else None
+    host_sid = room_host_sid(room)
 
     players: list[dict[str, Any]] = []
     for sid in room.sessions:
@@ -755,9 +809,12 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
                 "status": status,
                 "status_class": status_class,
                 "is_viewer": sid == viewer.id,
+                "is_host": sid == host_sid,
                 "eliminated": sid in room.eliminated,
                 "account": s.account_username,
                 "highest_tier": s.highest_tier,
+                "words_correct": s.words_correct,
+                "words_attempted": s.words_attempted,
             },
         )
 
@@ -773,7 +830,7 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
         "mode": display_mode(room.visibility),
         "chat": list(room.chat),
         "waiting_for_players": len(alive) < 2 and not room.current_word,
-        "is_host": viewer.id == room_host_sid(room),
+        "is_host": viewer.id == host_sid,
         "room_locked": room.locked,
         "is_spectator": is_spectator,
         "ready_count": len(room.ready_votes),
@@ -782,11 +839,15 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
     }
 
     if room.winner:
-        ctx["feedback"] = feedback(f"{room.winner} wins", "", "success")
+        ctx["feedback"] = feedback(f"{room.winner} wins", kind="success")
+        ctx["match_results"] = room.last_match_results
         # Per-viewer intermission feedback
         for mr in room.last_match_results:
             if mr["sid"] == viewer.id:
                 parts = [f"Rank: {mr['rank']}."]
+                if mr.get("words_attempted"):
+                    pct = round(mr["words_correct"] / mr["words_attempted"] * 100)
+                    parts.append(f"{mr['words_correct']}/{mr['words_attempted']} correct ({pct}%).")
                 if "elo" in mr:
                     sign = "+" if mr["elo_delta"] >= 0 else ""
                     parts.append(f"ELO: {mr['elo']} ({sign}{mr['elo_delta']}).")
@@ -809,15 +870,14 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
         ctx["word_served_at"] = room.word_served_at
 
         if is_active:
-            ctx["feedback"] = viewer.last_feedback or feedback("Your turn", "", "info")
+            ctx["feedback"] = viewer.last_feedback or feedback("Your turn", kind="info")
         else:
             ctx["feedback"] = (
                 viewer.last_feedback
                 if viewer.id in room.eliminated
                 else feedback(
                     f"{active_sess.player_name}'s turn" if active_sess else "Waiting",
-                    "",
-                    "info",
+                    kind="info",
                 )
             )
 
@@ -839,6 +899,26 @@ def build_room_ctx(state: AppState, room: Room, viewer: Session) -> dict[str, An
     return ctx
 
 
+def _render_room_sse(
+    state: AppState,
+    sess: Session,
+    code: str,
+    request: Request,
+    user: str | None,
+) -> str | None:
+    room = state.rooms.get(code)
+    if not room:
+        return None
+    ctx = build_room_ctx(state, room, sess)
+    ctx["request"] = request
+    ctx["user"] = user
+    html = templates.env.get_template("fragments/room.html").render(**ctx)
+    # sse-swap delivers data directly without hx-select, so send only #room-state
+    marker = '<div id="room-state"'
+    idx = html.find(marker)
+    return html[idx:] if idx >= 0 else None
+
+
 @app.get("/room/{code}", response_class=HTMLResponse)
 async def room_poll(request: Request, code: str) -> HTMLResponse:
     state: AppState = request.app.state.srv
@@ -855,6 +935,7 @@ async def room_stream(request: Request, code: str):
         return Response(status_code=403)
 
     sid = sess.id
+    user = get_current_user(request)
 
     # Cancel any pending disconnect timer (player is reconnecting)
     handle = state.disconnect_timers.pop(sid, None)
@@ -866,7 +947,9 @@ async def room_stream(request: Request, code: str):
 
     async def gen():
         try:
-            yield {"event": "refresh", "data": ""}
+            html = _render_room_sse(state, sess, code, request, user)
+            if html:
+                yield {"event": "refresh", "data": html}
             while code in state.rooms:
                 msg = await q.get()
                 # Drain queue, keeping only the latest per event type
@@ -874,8 +957,13 @@ async def room_stream(request: Request, code: str):
                 while not q.empty():
                     m = q.get_nowait()
                     latest[m["event"]] = m
-                for m in latest.values():
-                    yield m
+                for event_type, m in latest.items():
+                    if event_type == "refresh":
+                        html = _render_room_sse(state, sess, code, request, user)
+                        if html:
+                            yield {"event": "refresh", "data": html}
+                    else:
+                        yield m
         finally:
             state.subscribers[code].discard(q)
             if code in state.subscribers and not state.subscribers[code]:
@@ -907,7 +995,9 @@ async def room_chat(request: Request, code: str) -> HTMLResponse:
     form = await request.form()
     msg = str(form.get("message", "")).strip()[:MAX_CHAT_LEN]
     if msg:
-        room.add_chat({"player": sess.player_name, "message": msg, "sid": sess.id})
+        room.add_chat(
+            {"player": sess.player_name, "message": msg, "sid": sess.id, "ts": time.time()},
+        )
         state.room_changed(code)
 
     return HTMLResponse("")

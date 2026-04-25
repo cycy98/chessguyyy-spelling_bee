@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, Any
 
 from backend import db
@@ -20,10 +19,8 @@ async def is_name_reserved(player_name: str, account_username: str | None) -> bo
 
 
 async def load_highest_tier(username: str, difficulties: list[str]) -> str:
-    row = await db.fetchone("SELECT tiers_cleared FROM users WHERE username=?", (username,))
-    if not row or not row["tiers_cleared"]:
-        return ""
-    tiers = [t for t in row["tiers_cleared"].split(",") if t in difficulties]
+    rows = await db.fetchall("SELECT tier FROM user_tiers WHERE username=?", (username,))
+    tiers = [r["tier"] for r in rows if r["tier"] in difficulties]
     return max(tiers, key=difficulties.index) if tiers else ""
 
 
@@ -39,8 +36,8 @@ async def record_guess_stats(
         return
     async with db.transaction() as conn:
         await conn.execute(
-            "INSERT INTO guess_log(username, word, correct, wpm, tier, ts) VALUES(?,?,?,?,?,?)",
-            (username, word_str, int(correct), wpm, tier, time.time()),
+            "INSERT INTO guess_log(username, word, correct, wpm, tier) VALUES(?,?,?,?,?)",
+            (username, word_str, int(correct), wpm, tier),
         )
         if correct and streak > 0:
             await conn.execute(
@@ -73,15 +70,14 @@ async def persist_match_elo(
         if len(tracked) >= 2:
             update_elo(tracked)
             n_players = len(tracked)
-            now = time.time()
             for t in tracked:
                 await conn.execute(
                     "UPDATE users SET elo = ? WHERE username = ?",
                     (t["elo"], t["account"]),
                 )
                 await conn.execute(
-                    "INSERT INTO match_results(username, rank, players, ts) VALUES(?,?,?,?)",
-                    (t["account"], t["rank"], n_players, now),
+                    "INSERT INTO match_results(username, rank, players) VALUES(?,?,?)",
+                    (t["account"], t["rank"], n_players),
                 )
 
     # Enrich the already-set scoreboard entries with ELO data
