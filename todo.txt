@@ -1,7 +1,6 @@
 Ideas to implement
-- Add here
+- Discord stats
 
 Cancelled
-- Add admin tools to edit bad stats or remove fake accounts.
 - Add account avatars
 - Add replay/share links for strong performances.
